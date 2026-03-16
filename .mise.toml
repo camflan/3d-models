@@ -1,0 +1,2 @@
+# openscad and entr/fswatch are not in the mise registry
+# Install via: brew install --cask openscad && brew install entr

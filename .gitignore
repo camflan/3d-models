@@ -1,0 +1,17 @@
+# OS
+.DS_Store
+Thumbs.db
+
+# OpenSCAD
+*.deps
+
+# Fusion 360 recovery/temp
+*.fres
+*.fbak
+
+# FreeCAD backup/recovery
+*.FCStd1
+*.FCBak
+
+# Build outputs (tracked exports live in exports/)
+/build/
