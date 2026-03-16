@@ -20,11 +20,7 @@ Wall-mounted holster for a drill/driver. Slanted open-top box with a grip slot c
 | `slant_angle` | 65° | Front opening angle |
 | `only_outer_clips` | false | Limit to corner clips only |
 
-**Dependencies:** [fillets3d.scad](https://github.com/clothbot/ClothBotCreations/blob/master/utilities/fillets3d.scad), `clip-seat_fixed.stl` (included — sourced from the T-clip system, repaired via Formware)
-
-### parametric_tray_for_boxes_v1_72w
-
-Pre-built tray export (72mm width variant).
+**Dependencies:** `clip-seat_fixed.stl` (included — sourced from the T-clip system, repaired via Formware)
 
 ## Printing
 
