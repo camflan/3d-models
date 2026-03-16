@@ -14,8 +14,8 @@ projects/<name>/
 ## Setup
 
 ```sh
-brew install --cask openscad
-brew install entr
+brew bundle
+git config --local core.hooksPath .githooks
 ```
 
 ## Usage
