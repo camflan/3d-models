@@ -19,33 +19,6 @@ outer_height = inner_height + (wall_thickness * 2);
 outer_width = inner_width + (wall_thickness * 2);
 
 
-module rounded_rect(l, w, h, r) {
-    linear_extrude(height = l) { // Extrude to give it thickness
-        hull() {
-            // Bottom-left corner
-            translate([r, r, 0]) circle(r=r);
-            // Bottom-right corner
-            translate([h-r, r, 0]) circle(r=r);
-            // Top-left corner
-            translate([r, w-r, 0]) circle(r=r);
-            // Top-right corner
-            translate([h-r, w-r, 0]) circle(r=r);
-        }
-        // Add the straight segments if not covered by hull
-        // This part can be complex and often requires more sophisticated methods
-    }
-}
-
-module hollow_rounded_rect(l, w, h, r, thickness) {
-difference() {
-  rounded_rect(l, w, h, r);
-  
-  double_thickness = thickness * 2;
-  
-  translate([thickness, thickness, -1])
-    rounded_rect(l + 2, w - double_thickness, h - double_thickness, r);
-}
-}
 
 
 tray_width = outer_width;
@@ -58,6 +31,36 @@ clip_path = "./clip-seat_fixed.stl";
 clip_size = 28.2;
 clip_depth = 5.4;
 only_outer_clips = false;  // this limits to max of 2 clips
+
+module rounded_rect(width, depth, height, radius) {
+    // Ensure the radius is not too large
+    radius = min(radius, min(width, depth) / 2);
+
+    linear_extrude(height = height) {
+        hull() {
+            // Bottom-left
+            translate([radius, radius]) circle(r = radius);
+            // Bottom-right
+            translate([width - radius, radius]) circle(r = radius);
+            // Top-left
+            translate([radius, depth - radius]) circle(r = radius);
+            // Top-right
+            translate([width - radius, depth - radius]) circle(r = radius);
+        }
+    }
+}
+
+
+module hollow_rounded_rect(l, w, h, r, thickness) {
+difference() {
+  rounded_rect(w, h, l, r);
+  
+  double_thickness = thickness * 2;
+  
+  translate([thickness, thickness, -1])
+    rounded_rect(w - double_thickness, h - double_thickness,l + 2,  r);
+}
+}
 
 
 module draw_clip() {
@@ -118,7 +121,7 @@ translate([depth - grip_slot_depth, outer_width / 2, wall_thickness])
     
 // backside
 difference() {
-    rotate([90, 270, 270]) rounded_rect(clip_depth, outer_height, outer_width, 5);
+    rotate([90, 270, 270]) rounded_rect(outer_height, outer_width,clip_depth,  5);
     for (row = [0:skadis_row_count]) {
         row_h_count = (row % 2 == 0) ? skadis_hole_count : skadis_hole_count_odd;
         row_h_offset = (row % 2 == 0) ? skadis_hole_offset : skadis_hole_offset_odd;
