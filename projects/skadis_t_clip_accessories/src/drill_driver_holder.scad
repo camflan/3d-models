@@ -21,16 +21,28 @@ outer_width = inner_width + (wall_thickness * 2);
 
 
 
-tray_width = outer_width;
 back_height = outer_height;  // must be more than clip_size and the height of the box, plus some extra space for lifting and pulling
 
-edge_holder_thickness = 0;
-
+// ================= SKADIS / T-CLIP ==============================
 // t-clip from: https://www.printables.com/model/256896-skadis-t-clip-system/files plus https://www.formware.co/onlinestlrepair
 clip_path = "./clip-seat_fixed.stl";
 clip_size = 28.2;
 clip_depth = 5.4;
 only_outer_clips = false;  // this limits to max of 2 clips
+
+// Horizontal clip layout (even rows)
+skadis_hole_count = ceil((outer_width - clip_size) / 40) - 1;
+skadis_hole_offset = (((outer_width - clip_size) % 40) / 2);
+
+// Vertical row layout — 40mm Skadis grid spacing
+skadis_row_count = max(0, ceil((back_height - clip_size) / 20) - 1);
+skadis_row_offset_z = (((back_height - clip_size) % 20) / 2);
+
+// Odd rows are offset 20mm horizontally per Skadis alternating pattern
+skadis_hole_count_odd = max(-1, floor((outer_width - clip_size - skadis_hole_offset - 20) / 40));
+skadis_hole_offset_odd = skadis_hole_offset + 20;
+
+
 
 module rounded_rect(width, depth, height, radius) {
     // Ensure the radius is not too large
@@ -63,6 +75,7 @@ difference() {
 }
 
 
+
 module draw_clip() {
     translate([-clip_depth, clip_size/2, clip_size/2]) rotate([0, 0, 90]) import(clip_path);
 }
@@ -79,20 +92,6 @@ module half_rounded_cube(height, width, depth, curve=10) {
         translate([height - curve/2, width - curve/2, 0]) cylinder(h=depth, d=curve);
     }
 }
-
-
-
-// Horizontal clip layout (even rows)
-skadis_hole_count = ceil((outer_width - clip_size) / 40) - 1;
-skadis_hole_offset = (((outer_width - clip_size) % 40) / 2);
-
-// Vertical row layout — 40mm Skadis grid spacing
-skadis_row_count = max(0, ceil((back_height - clip_size) / 20) - 1);
-skadis_row_offset_z = (((back_height - clip_size) % 20) / 2);
-
-// Odd rows are offset 20mm horizontally per Skadis alternating pattern
-skadis_hole_count_odd = max(-1, floor((outer_width - clip_size - skadis_hole_offset - 20) / 40));
-skadis_hole_offset_odd = skadis_hole_offset + 20;
 
 
 difference() {
