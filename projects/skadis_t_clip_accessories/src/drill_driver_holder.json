@@ -1,0 +1,14 @@
+{
+    "fileFormatVersion": "1",
+    "parameterSets": {
+        "Parameters": {
+            "$fn": "128",
+            "depth": "160",
+            "grip_slot_width": "40",
+            "mode": "outer",
+            "slant_angle": "65",
+            "slant_start_depth": "175",
+            "wall_thickness": "4"
+        }
+    }
+}

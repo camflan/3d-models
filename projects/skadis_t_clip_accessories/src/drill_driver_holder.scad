@@ -1,24 +1,39 @@
 $fn = 128;
 
+// User configuration
 
+// Dimension calculation mode: "outer" or "inner". Calculates total dimensions based on if you want to specify the inner dimensions to fit your tool, or the outer dimensions to fit a spot on your SKADIS board. Outer dimensions need to be multiples of 40 to fit side by side without gaps
+mode = "outer";
 
+height = 80;
+width = 80;
 depth = 160;
-inner_height = 75;
-inner_width = 72;
+wall_thickness = 4;
 
+// Slot in the bottom to fit the grip
 grip_slot_width = 40;
 grip_slot_depth = depth - 50;
-
-wall_thickness = 4;
 
 slant_angle = 65;
 slant_start_depth = 175;
 
+// Controls whether we calculate all internal clips that fit, or only the outer/corners
+only_outer_clips = false;
 
-outer_height = inner_height + (wall_thickness * 2);
-outer_width = inner_width + (wall_thickness * 2);
+assert(mode == "outer" || mode == "inner", "mode must be 'outer' or 'inner'");
 
 
+// Internal calculations
+double_wall_thickness = wall_thickness * 2;
+outer_height = (mode == "outer") ? height : height + double_wall_thickness;
+outer_width = (mode == "outer") ? width : width + double_wall_thickness;
+inner_height = (mode == "inner") ? height : height - double_wall_thickness;
+inner_width = (mode == "inner") ? width : width - double_wall_thickness;
+
+echo("=================  Final dimensions  ==================");
+echo("Outer height: ", outer_height, "width: ", outer_width);
+echo("Inner height: ", inner_height, "width: ", inner_width);
+echo("========================================================");
 
 
 back_height = outer_height;  // must be more than clip_size and the height of the box, plus some extra space for lifting and pulling
@@ -28,7 +43,6 @@ back_height = outer_height;  // must be more than clip_size and the height of th
 clip_path = "./clip-seat_fixed.stl";
 clip_size = 28.2;
 clip_depth = 5.4;
-only_outer_clips = false;  // this limits to max of 2 clips
 
 // Horizontal clip layout (even rows)
 skadis_hole_count = ceil((outer_width - clip_size) / 40) - 1;
@@ -41,8 +55,6 @@ skadis_row_offset_z = (((back_height - clip_size) % 20) / 2);
 // Odd rows are offset 20mm horizontally per Skadis alternating pattern
 skadis_hole_count_odd = max(-1, floor((outer_width - clip_size - skadis_hole_offset - 20) / 40));
 skadis_hole_offset_odd = skadis_hole_offset + 20;
-
-
 
 module rounded_rect(width, depth, height, radius) {
     // Ensure the radius is not too large
