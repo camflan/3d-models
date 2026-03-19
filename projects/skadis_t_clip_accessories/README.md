@@ -6,6 +6,8 @@ Parametric accessories for IKEA Skadis pegboard using the [T-clip system](https:
 
 ### drill_driver_holder
 
+![drill_driver_holder preview](exports/drill_driver_holder_preview.png)
+
 Wall-mounted holster for a drill/driver. Slanted open-top box with a grip slot cutout in the base for easy removal. Clips are automatically placed on the Skadis 40mm/20mm alternating grid pattern.
 
 **Key parameters:**

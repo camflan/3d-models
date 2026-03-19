@@ -16,6 +16,7 @@
 OPENSCAD := openscad
 SCAD_SRC := $(shell find projects -name '*.scad' 2>/dev/null)
 STL_OUT  := $(SCAD_SRC:%.scad=%.stl)
+PNG_OUT  := $(foreach s,$(SCAD_SRC),$(dir $(s))../exports/$(notdir $(s:.scad=_preview.png)))
 
 # Default: build all .scad → .stl alongside source
 .PHONY: build
@@ -77,6 +78,28 @@ new:
 	@echo "# $(P)\n" > projects/$(P)/README.md
 	@echo "Created projects/$(P)/"
 
+# ──────────────────────────────────────────────────────────
+# Preview image generation
+# ──────────────────────────────────────────────────────────
+
+.PHONY: previews
+previews: $(PNG_OUT)
+
+projects/%/exports/%_preview.png: projects/%/src/%.scad
+	@mkdir -p $(dir $@)
+	$(OPENSCAD) --render -o $@ --imgsize=800,600 $<
+
+# Generate previews for a single project: make preview-images P=<name>
+.PHONY: preview-images
+preview-images:
+	@test -n "$(P)" || (echo "usage: make preview-images P=<name>" && exit 1)
+	@for f in projects/$(P)/src/*.scad; do \
+		[ -f "$$f" ] || continue; \
+		base=$$(basename "$$f" .scad); \
+		mkdir -p projects/$(P)/exports; \
+		$(OPENSCAD) --render -o "projects/$(P)/exports/$${base}_preview.png" --imgsize=800,600 "$$f"; \
+	done
+
 .PHONY: clean
 clean:
 	find projects -name '*.stl' -path '*/src/*' -delete
@@ -91,4 +114,6 @@ help:
 	@echo "  preview F=<file>   Open file in OpenSCAD GUI"
 	@echo "  export P=<name>    Copy STLs to exports/"
 	@echo "  new P=<name>       Scaffold a new project"
+	@echo "  previews           Render all .scad → preview PNG"
+	@echo "  preview-images P=  Render PNGs for one project"
 	@echo "  clean              Remove built STLs from src/"
