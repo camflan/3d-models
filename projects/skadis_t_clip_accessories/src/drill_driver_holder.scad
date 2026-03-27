@@ -105,6 +105,15 @@ module half_rounded_cube(height, width, depth, curve=10) {
     }
 }
 
+// Example using a multi_line_text module
+module multi_line_text(texts, size=10, line_spacing=1.2) {
+  for (i = [0:len(texts)-1]) {
+    translate([0, -i * size * line_spacing, 0])
+      text(texts[i], size=size);
+  }
+}
+
+difference() {
 
 difference() {
     difference() {
@@ -126,6 +135,13 @@ translate([depth - grip_slot_depth, (outer_width - grip_slot_width) / 2, -2])
 translate([depth - grip_slot_depth, outer_width / 2, wall_thickness])    
     cylinder(wall_thickness * 2, r=grip_slot_width / 2, center=true);
 }
+  
+    #rotate([180, 0, 90])
+    translate([2, 10, -1])
+    linear_extrude(height=1)
+    multi_line_text(["Line 1", "Line 2", "Line 3"], size=4);
+}
+
 
 
  
