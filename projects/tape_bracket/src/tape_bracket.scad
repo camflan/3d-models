@@ -6,7 +6,7 @@
 // Wall at X=0, +X away from wall, Y along rod, Z vertical
 // ============================================================
 
-$fn = 60;
+$fn = 128;
 
 // === ROD PARAMETERS ===
 rod_diameter    = 15.875;
@@ -14,9 +14,9 @@ rod_clearance   = 0.3;
 rod_hole_dia    = rod_diameter + rod_clearance;
 
 // === SET SCREW ===
-set_screw_dia       = 4.2;
-set_screw_recess    = 7.5;
-set_screw_recess_d  = 4.0;
+//set_screw_dia       = 4.2;
+//set_screw_recess    = 7.5;
+//set_screw_recess_d  = 4.0;
 
 // === BRACKET DIMENSIONS ===
 arm_width       = 30;
@@ -26,16 +26,8 @@ arm_h           = rod_hole_dia + min_wall * 2;
 // === ROD POSITIONS ===
 inner_rod_x     = 25;
 inner_rod_z     = -12;
-outer_rod_x     = 80;
+outer_rod_x     = 100;
 outer_rod_z     = 12;
-
-// === MULTICONNECT SLOT PARAMETERS ===
-mc_grid         = 25;
-mc_num_slots    = 2;
-mc_head_dia     = 19.8;
-mc_neck_width   = 10.2;
-mc_slot_depth   = 4.0;
-mc_entry_height = 8;
 
 // === BACK PLATE ===
 back_plate_t    = 8.6;
@@ -50,6 +42,17 @@ web_t           = 5;
 boss_r_extra    = 4;
 cutout_r        = 4;      // corner rounding on cutouts
 edge_r          = 2;      // rounding on outer profile corners
+
+
+// Tape rolls
+rolls = [
+    // inner, outer, width
+    [38, 76, 19], // electrical
+    [76, 127, 48], // duct
+    [76, 114, 48], // packing
+    [76, 102, 40], // masking
+];
+
 
 // ============================================================
 // DERIVED
@@ -76,29 +79,12 @@ function bot_z_at(x) = bot_z0 + (x - bot_x0) * bot_slope;
 // MODULES
 // ============================================================
 
-module mc_slot_profile() {
-    circle(d = mc_head_dia);
-    translate([-mc_neck_width/2, 0])
-        square([mc_neck_width, mc_head_dia/2 + mc_entry_height]);
-}
-
-module mc_slot_cut(z_pos) {
-    translate([-0.1, 0, z_pos])
-    rotate([0, 90, 0])
-    rotate([0, 0, -90])
-    linear_extrude(mc_slot_depth + 0.2)
-        mc_slot_profile();
-}
 
 module rod_cuts(rx, rz) {
     translate([rx, 0, rz])
         rotate([90, 0, 0])
         translate([0, 0, -arm_width - 1])
         cylinder(h = arm_width * 2 + 2, d = rod_hole_dia);
-    translate([rx, 0, rz])
-        cylinder(h = arm_h, d = set_screw_dia);
-    translate([rx, 0, rz + arm_h/2 - set_screw_recess_d])
-        cylinder(h = set_screw_recess_d + 1, d = set_screw_recess);
 }
 
 // Solid outer profile - original V2 flat silhouette
@@ -180,29 +166,82 @@ module bracket_body() {
     rotate([90, 0, 0])
     linear_extrude(arm_width)
         offset(r=edge_r) offset(r=-edge_r)
-        truss_profile_2d();
+        solid_profile_2d();
 
     // Cylindrical rod bosses
-    for (pos = [[inner_rod_x, inner_rod_z], [outer_rod_x, outer_rod_z]])
-        translate([pos[0], 0, pos[1]])
-            rotate([90, 0, 0])
-            translate([0, 0, -arm_width/2])
-            cylinder(h=arm_width, d=arm_h);
+//    for (pos = [[inner_rod_x, inner_rod_z], [outer_rod_x, outer_rod_z]])
+//        translate([pos[0], 0, pos[1]])
+//            rotate([90, 0, 0])
+//            translate([0, 0, -arm_width/2])
+//            cylinder(h=arm_width, d=arm_h);
 }
 
 // ============================================================
 // ASSEMBLY
 // ============================================================
+module rod_slots() {
+    rod_cuts(inner_rod_x, inner_rod_z);
+    rod_cuts(outer_rod_x, outer_rod_z);
+}
+
 module tape_bracket() {
     difference() {
         bracket_body();
-        rod_cuts(inner_rod_x, inner_rod_z);
-        rod_cuts(outer_rod_x, outer_rod_z);
-        for (i = [0 : mc_num_slots - 1]) {
-            sz = -((mc_num_slots - 1) * mc_grid) / 2 + i * mc_grid;
-            mc_slot_cut(sz);
-        }
+        rod_slots();
     }
 }
 
-tape_bracket();
+difference() {
+    hull() {
+        tape_bracket();
+        translate([0, -arm_width, plate_bottom])
+            cube([10, arm_width, plate_top - plate_bottom]);
+    }
+
+    rod_slots();
+}
+
+
+module tape_roll(spool_diameter, outer_diameter, width) {
+    translate([0,0,0])
+    rotate([90, 0, 0])
+    difference() {
+    cylinder(h = width, r=outer_diameter/2, center=true);
+    cylinder(h=width, r = spool_diameter/2, center=true);
+    }
+}
+
+module rod(x, z, length = 300) {
+    translate([x, 0, z])
+    rotate([90, 0, 0])
+    cylinder(h = length, r = rod_diameter/2);
+}
+
+module inner_rod() {
+rod(inner_rod_x, inner_rod_z);
+}
+
+module outer_rod() {
+rod(outer_rod_x, outer_rod_z);
+}
+
+function cumulative_y(i, sum = 0) = 
+    i + 1 >= len(rolls)
+        ? sum
+        : cumulative_y(i + 1, sum + rolls[i][2]);
+
+for (roll_idx = [0:2]) {
+    roll = rolls[roll_idx];
+    id = roll[0];
+    od = roll[1];
+    w = roll[2];
+    
+    offset = cumulative_y(roll_idx);
+    echo(offset);
+    
+    translate([od/2, cumulative_y(roll_idx), 10])
+  tape_roll(id, od, w);
+  }
+
+inner_rod();
+outer_rod();
