@@ -338,7 +338,7 @@ def _parse_water_bodies(data, exclude_types=None):
             if len(coords) >= 4 and node_ids[0] == node_ids[-1]:
                 bodies.append(np.array(coords))
 
-    # Relations (multipolygon) — extract outer ways
+    # Relations (multipolygon) — join member ways into closed rings
     way_lookup = {}
     for elem in data["elements"]:
         if elem["type"] == "way":
@@ -354,15 +354,77 @@ def _parse_water_bodies(data, exclude_types=None):
             if water_type in exclude_types:
                 excluded += 1
                 continue
-            for member in elem.get("members", []):
-                if member["type"] == "way" and member.get("role") == "outer":
-                    wid = member["ref"]
-                    if wid in way_lookup:
-                        coords = way_lookup[wid]
-                        if len(coords) >= 4:
-                            bodies.append(np.array(coords))
+            for role in ("outer",):
+                way_ids = [
+                    m["ref"] for m in elem.get("members", [])
+                    if m["type"] == "way" and m.get("role") == role
+                ]
+                rings = _join_ways_into_rings(way_ids, way_lookup)
+                for ring in rings:
+                    if len(ring) >= 4:
+                        bodies.append(np.array(ring))
 
     return bodies, excluded
+
+
+def _join_ways_into_rings(way_ids, way_lookup):
+    """
+    Join an ordered list of way segments into closed rings.
+
+    OSM multipolygon relations store outer/inner boundaries as
+    sequences of ways that share endpoints. This stitches them
+    together into complete closed coordinate rings.
+    """
+    # Collect way coordinate lists
+    segments = []
+    for wid in way_ids:
+        if wid in way_lookup:
+            segments.append(list(way_lookup[wid]))
+
+    if not segments:
+        return []
+
+    rings = []
+    current = segments.pop(0)
+
+    while segments:
+        # Find a segment that connects to current's endpoint
+        #   ┌─── current ───┐
+        #   start           end ← try to match this to a segment's start or end
+        end = current[-1]
+        found = False
+        for i, seg in enumerate(segments):
+            if seg[0] == end:
+                current.extend(seg[1:])
+                segments.pop(i)
+                found = True
+                break
+            elif seg[-1] == end:
+                current.extend(reversed(seg[:-1]))
+                segments.pop(i)
+                found = True
+                break
+
+        if not found:
+            # Current ring can't be extended — save it and start a new one
+            if current[0] == current[-1] and len(current) >= 4:
+                rings.append(current)
+            current = segments.pop(0)
+            continue
+
+        # Check if ring is closed
+        if current[0] == current[-1] and len(current) >= 4:
+            rings.append(current)
+            if segments:
+                current = segments.pop(0)
+            else:
+                current = []
+
+    # Don't lose the last ring
+    if current and current[0] == current[-1] and len(current) >= 4:
+        rings.append(current)
+
+    return rings
 
 
 def geo_to_panel_coords(coords, south, north, west, east, panel_size_mm, center_lat):

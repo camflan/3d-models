@@ -17,7 +17,6 @@
             "corner_radius": "4",
             "panel_size": "254",
             "panel_thickness": "5",
-            "relief_height": "3",
             "road_depth": "5",
             "road_file": "topo_output\/roads.dxf"
         },
@@ -28,7 +27,6 @@
             "corner_radius": "3",
             "panel_size": "254",
             "panel_thickness": "5",
-            "relief_height": "0",
             "road_depth": "1.3999999999999999",
             "road_file": "topo_output\/roads.dxf"
         },
@@ -39,9 +37,33 @@
             "corner_radius": "4",
             "panel_size": "254",
             "panel_thickness": "5",
-            "relief_height": "5",
             "road_depth": "1.3999999999999999",
             "road_file": "topo_output\/roads.dxf"
+        },
+        "New set 5": {
+            "$fn": "100",
+            "contour_depth": "1",
+            "contour_file": "topo_output\/contours.dxf",
+            "corner_radius": "4",
+            "panel_size": "254",
+            "panel_thickness": "5",
+            "road_depth": "0.59999999999999998",
+            "road_file": "topo_output\/roads.dxf",
+            "water_depth": "1.6000000000000001",
+            "water_file": "topo_output\/water.dxf"
+        },
+        "New set 6": {
+            "$fn": "100",
+            "border_width": "4",
+            "contour_depth": "1",
+            "contour_file": "topo_output\/contours.dxf",
+            "corner_radius": "8",
+            "panel_size": "254",
+            "panel_thickness": "5",
+            "road_depth": "1.3999999999999999",
+            "road_file": "topo_output\/roads.dxf",
+            "water_depth": "1.2",
+            "water_file": "topo_output\/water.dxf"
         }
     }
 }
