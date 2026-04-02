@@ -1,35 +1,31 @@
 // ============================================================
 //  Topo Panel — Lawrence, KS
-//  Stepped topographic relief with debossed contour and road grooves.
+//  Debossed topographic contours, roads, and water features
 //
 //  Prerequisites:
 //    Run `uv run topo_panel_generator.py` first to generate
-//    the DXF files and relief.scad in ./topo_output/
+//    the DXF files in ./topo_output/
 //
 //  Tip: Use F5 (preview) liberally — F6 (render) will be
 //  slow due to the polygon count from buffered contour lines.
 // ============================================================
 
-use <topo_output/relief.scad>
-
 $fn = 100;
 
 // --- Panel dimensions ---
 panel_size      = 254;     // mm (10 inches)
-panel_thickness = 5;       // mm — base slab thickness
+panel_thickness = 5;       // mm — total slab thickness
 corner_radius   = 4;       // mm — 0 for sharp corners
 
-// --- Deboss depths ---
-contour_depth  = 1.0;     // mm — how deep contour grooves cut into each step
-road_depth     = 0;       // mm — roads cut from top of relief. 0 to disable.
-
-// --- Elevation relief ---
-//  Must match RELIEF_HEIGHT_MM in topo_panel_generator.py.
-//  Set to 0 to disable (flat panel with debossed grooves only).
-relief_height  = 3.0;     // mm — total height across all steps
+// --- Deboss depths (from top surface) ---
+contour_depth   = 1.0;    // mm — contour line grooves
+road_depth      = 1.4;    // mm — road grooves (slightly deeper so they pop)
+water_depth     = 1.2;    // mm — depressed water surfaces (rivers + lakes)
 
 // --- File paths (relative to this .scad file) ---
-road_file      = "topo_output/roads.dxf";
+contour_file = "topo_output/contours.dxf";
+road_file    = "topo_output/roads.dxf";
+water_file   = "topo_output/water.dxf";
 
 // ============================================================
 //  Modules
@@ -50,23 +46,22 @@ module base_panel() {
         rounded_square(panel_size, corner_radius);
 }
 
-module relief_clipped() {
-    if (relief_height > 0) {
-        translate([0, 0, panel_thickness])
-        intersection() {
-            linear_extrude(height = relief_height + 0.1)
-                rounded_square(panel_size, corner_radius);
-            relief_layers(contour_depth);
-        }
-    }
+module contour_cut() {
+    translate([0, 0, panel_thickness - contour_depth])
+        linear_extrude(height = contour_depth + 0.1)
+            import(contour_file);
 }
 
 module road_cut() {
-    if (road_depth > 0) {
-        translate([0, 0, panel_thickness + relief_height - road_depth])
-            linear_extrude(height = road_depth + 0.1)
-                import(road_file);
-    }
+    translate([0, 0, panel_thickness - road_depth])
+        linear_extrude(height = road_depth + 0.1)
+            import(road_file);
+}
+
+module water_cut() {
+    translate([0, 0, panel_thickness - water_depth])
+        linear_extrude(height = water_depth + 0.1)
+            import(water_file);
 }
 
 // ============================================================
@@ -74,9 +69,8 @@ module road_cut() {
 // ============================================================
 
 difference() {
-    union() {
-        base_panel();
-        relief_clipped();
-    }
+    base_panel();
+    contour_cut();
     road_cut();
+    water_cut();
 }

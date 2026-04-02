@@ -2,19 +2,18 @@
 """
 Topo Panel Generator
 ====================
-Generates DXF files of topographic contour lines and roads for
-3D printing debossed panels in OpenSCAD or FreeCAD.
+Generates DXF files of topographic contour lines, roads, and water
+features for 3D printing debossed panels in OpenSCAD.
 
 Workflow:
   1. Downloads SRTM elevation data for the target area
   2. Generates contour lines at a configurable interval
-  3. Fetches road geometries from OpenStreetMap
+  3. Fetches road and water geometries from OpenStreetMap
   4. Buffers all lines to a printable groove width
   5. Outputs DXF files ready for OpenSCAD import
 
 Usage:
-  pip install -r requirements.txt
-  python topo_panel_generator.py
+  uv run topo_panel_generator.py
 
 Then open panel.scad in OpenSCAD.
 """
@@ -22,14 +21,14 @@ Then open panel.scad in OpenSCAD.
 import sys
 import numpy as np
 import matplotlib
-matplotlib.use("Agg")  # No GUI needed
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import hashlib
 import json
 import srtm
 import ezdxf
 import requests
-from shapely.geometry import LineString, Point, Polygon, MultiPolygon
+from shapely.geometry import LineString, Polygon, MultiPolygon
 from shapely.ops import unary_union
 from pathlib import Path
 
@@ -59,6 +58,22 @@ CONTOUR_LINE_WIDTH_MM = 0.6    # Width of debossed contour grooves
 ROAD_TYPES = ["motorway", "trunk", "primary", "secondary"]
 ROAD_LINE_WIDTH_MM = 1.0       # Width of debossed road grooves
 
+# Water settings
+# Waterways (line features buffered to a given width)
+# OSM waterway types — pick from:
+#   river, stream, canal, drain, ditch, brook, tidal_channel
+# Width in mm per type (only types listed here are fetched):
+WATERWAY_WIDTHS_MM = {
+    "river": 3.0,
+    "stream": 1.0,
+}
+# Water bodies (area features using actual polygon shapes from OSM)
+# OSM water= types to exclude — pick from:
+#   basin, canal, ditch, drain, fishpond, lake, lock, moat, oxbow,
+#   pond, reflecting_pool, reservoir, river, salt_pool, sewage,
+#   shallow, stream_pool, swamp, swimming_pool, wastewater, wetland
+WATER_BODY_EXCLUDE = {"wastewater", "basin", "sewage"}
+
 # Elevation sampling resolution (NxN grid)
 # Higher = more detail but slower. 300-500 is a good range.
 GRID_RESOLUTION = 500
@@ -67,10 +82,6 @@ GRID_RESOLUTION = 500
 # faster OpenSCAD render but less precise curves.
 SIMPLIFY_TOLERANCE_MM = 0.1
 
-# Elevation relief — stacked filled contour regions for stepped terrain
-RELIEF_ENABLED = True
-RELIEF_HEIGHT_MM = 3.0         # Total height range across all steps
-
 # Output directory (relative to this script)
 OUTPUT_DIR = "topo_output"
 
@@ -78,6 +89,10 @@ OUTPUT_DIR = "topo_output"
 # ============================================================
 #  INTERNALS — You probably don't need to change these
 # ============================================================
+
+CACHE_DIR = Path(OUTPUT_DIR) / ".cache"
+MIN_POLYGON_AREA_MM2 = 2.0
+
 
 def get_bbox(center_lat, center_lon, radius_km):
     """Calculate geographic bounding box from center point and radius."""
@@ -161,56 +176,21 @@ def generate_contours(lons, lats, elevations, interval):
     return contour_lines
 
 
-CACHE_DIR = Path(OUTPUT_DIR) / ".cache"
+# --- OSM data fetching (cached) ---
 
-def _road_cache_key(south, north, west, east, road_types):
+def _cache_key(prefix, south, north, west, east, tags):
     """Deterministic cache key based on query parameters."""
-    key = f"{south:.6f},{north:.6f},{west:.6f},{east:.6f}|{'|'.join(sorted(road_types))}"
+    key = f"{prefix}|{south:.6f},{north:.6f},{west:.6f},{east:.6f}|{'|'.join(sorted(tags))}"
     return hashlib.sha256(key.encode()).hexdigest()[:16]
 
 
-def _parse_road_data(data):
-    """Parse Overpass JSON response into road segment dicts."""
-    nodes = {}
-    for elem in data["elements"]:
-        if elem["type"] == "node":
-            nodes[elem["id"]] = (elem["lon"], elem["lat"])
-
-    roads = []
-    for elem in data["elements"]:
-        if elem["type"] == "way":
-            coords = [nodes[nid] for nid in elem.get("nodes", []) if nid in nodes]
-            if len(coords) >= 2:
-                roads.append({
-                    "coords": np.array(coords),
-                    "highway": elem.get("tags", {}).get("highway", "unknown"),
-                    "name": elem.get("tags", {}).get("name", ""),
-                })
-    return roads
-
-
-def get_roads(south, north, west, east, road_types):
-    """Fetch road geometries from OpenStreetMap via Overpass API (cached)."""
-    highway_filter = "|".join(road_types)
-
+def _fetch_osm(query, cache_file):
+    """Run an Overpass query, returning cached result if available."""
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    cache_file = CACHE_DIR / f"roads_{_road_cache_key(south, north, west, east, road_types)}.json"
 
     if cache_file.exists():
-        print(f"  Using cached road data ({cache_file.name})")
-        data = json.loads(cache_file.read_text())
-        roads = _parse_road_data(data)
-        print(f"  → {len(roads)} road segments")
-        return roads
-
-    print(f"  Fetching roads from OSM (types: {highway_filter})...")
-
-    query = f"""
-    [out:json][timeout:60];
-    way["highway"~"^({highway_filter})$"]({south},{west},{north},{east});
-    (._;>;);
-    out body;
-    """
+        print(f"  Using cached data ({cache_file.name})")
+        return json.loads(cache_file.read_text())
 
     try:
         resp = requests.post(
@@ -220,16 +200,169 @@ def get_roads(south, north, west, east, road_types):
         )
         resp.raise_for_status()
     except requests.RequestException as e:
-        print(f"  ⚠ Could not fetch roads: {e}")
-        print(f"    Continuing without roads. You can retry later.")
-        return []
+        print(f"  ⚠ Could not fetch OSM data: {e}")
+        print(f"    Continuing without this layer. You can retry later.")
+        return None
 
     data = resp.json()
     cache_file.write_text(json.dumps(data))
+    return data
 
-    roads = _parse_road_data(data)
-    print(f"  → {len(roads)} road segments")
-    return roads
+
+def _parse_ways(data):
+    """Extract way geometries as coordinate arrays from Overpass JSON."""
+    nodes = {}
+    for elem in data["elements"]:
+        if elem["type"] == "node":
+            nodes[elem["id"]] = (elem["lon"], elem["lat"])
+
+    ways = []
+    for elem in data["elements"]:
+        if elem["type"] == "way":
+            coords = [nodes[nid] for nid in elem.get("nodes", []) if nid in nodes]
+            if len(coords) >= 2:
+                ways.append({
+                    "coords": np.array(coords),
+                    "tags": elem.get("tags", {}),
+                })
+    return ways
+
+
+def get_roads(south, north, west, east, road_types):
+    """Fetch road geometries from OpenStreetMap via Overpass API (cached)."""
+    highway_filter = "|".join(road_types)
+    print(f"  Fetching roads from OSM (types: {highway_filter})...")
+
+    cache_file = CACHE_DIR / f"roads_{_cache_key('roads', south, north, west, east, road_types)}.json"
+
+    query = f"""
+    [out:json][timeout:60];
+    way["highway"~"^({highway_filter})$"]({south},{west},{north},{east});
+    (._;>;);
+    out body;
+    """
+
+    data = _fetch_osm(query, cache_file)
+    if data is None:
+        return []
+
+    ways = _parse_ways(data)
+    print(f"  → {len(ways)} road segments")
+    return ways
+
+
+def get_waterways(south, north, west, east, waterway_widths):
+    """Fetch waterway centerlines (rivers, streams) from OSM."""
+    types = list(waterway_widths.keys())
+    type_filter = "|".join(types)
+    print(f"  Fetching waterways from OSM (types: {type_filter})...")
+
+    cache_file = CACHE_DIR / f"waterways_{_cache_key('ww', south, north, west, east, types)}.json"
+
+    query = f"""
+    [out:json][timeout:60];
+    way["waterway"~"^({type_filter})$"]({south},{west},{north},{east});
+    (._;>;);
+    out body;
+    """
+
+    data = _fetch_osm(query, cache_file)
+    if data is None:
+        return []
+
+    ways = _parse_ways(data)
+    # Attach the configured width based on waterway type
+    for w in ways:
+        ww_type = w["tags"].get("waterway", "")
+        w["width_mm"] = waterway_widths.get(ww_type, 1.0)
+
+    print(f"  → {len(ways)} waterway segments")
+    return ways
+
+
+def get_water_bodies(south, north, west, east, exclude_types):
+    """
+    Fetch water body area polygons from OSM: natural=water (lakes, ponds)
+    and waterway=riverbank (older river area mapping).
+    """
+    print(f"  Fetching water bodies from OSM...")
+    cache_file = CACHE_DIR / f"water_{_cache_key('water', south, north, west, east, ['water', 'riverbank'])}.json"
+
+    query = f"""
+    [out:json][timeout:60];
+    (
+      way["natural"="water"]({south},{west},{north},{east});
+      relation["natural"="water"]({south},{west},{north},{east});
+      way["waterway"="riverbank"]({south},{west},{north},{east});
+      relation["waterway"="riverbank"]({south},{west},{north},{east});
+    );
+    (._;>;);
+    out body;
+    """
+
+    data = _fetch_osm(query, cache_file)
+    if data is None:
+        return []
+
+    water_bodies, excluded = _parse_water_bodies(data, exclude_types)
+    if excluded:
+        print(f"  → {len(water_bodies)} water polygons ({excluded} excluded)")
+    else:
+        print(f"  → {len(water_bodies)} water polygons")
+
+    return water_bodies
+
+
+def _parse_water_bodies(data, exclude_types=None):
+    """Extract closed water body polygons from Overpass JSON, filtering excluded types."""
+    exclude_types = exclude_types or set()
+
+    nodes = {}
+    for elem in data["elements"]:
+        if elem["type"] == "node":
+            nodes[elem["id"]] = (elem["lon"], elem["lat"])
+
+    bodies = []
+    excluded = 0
+
+    # Simple closed ways
+    for elem in data["elements"]:
+        if elem["type"] == "way":
+            tags = elem.get("tags", {})
+            water_type = tags.get("water", "")
+            if water_type in exclude_types:
+                excluded += 1
+                continue
+            node_ids = elem.get("nodes", [])
+            coords = [nodes[nid] for nid in node_ids if nid in nodes]
+            if len(coords) >= 4 and node_ids[0] == node_ids[-1]:
+                bodies.append(np.array(coords))
+
+    # Relations (multipolygon) — extract outer ways
+    way_lookup = {}
+    for elem in data["elements"]:
+        if elem["type"] == "way":
+            node_ids = elem.get("nodes", [])
+            coords = [nodes[nid] for nid in node_ids if nid in nodes]
+            if len(coords) >= 2:
+                way_lookup[elem["id"]] = coords
+
+    for elem in data["elements"]:
+        if elem["type"] == "relation":
+            tags = elem.get("tags", {})
+            water_type = tags.get("water", "")
+            if water_type in exclude_types:
+                excluded += 1
+                continue
+            for member in elem.get("members", []):
+                if member["type"] == "way" and member.get("role") == "outer":
+                    wid = member["ref"]
+                    if wid in way_lookup:
+                        coords = way_lookup[wid]
+                        if len(coords) >= 4:
+                            bodies.append(np.array(coords))
+
+    return bodies, excluded
 
 
 def geo_to_panel_coords(coords, south, north, west, east, panel_size_mm, center_lat):
@@ -260,31 +393,6 @@ def geo_to_panel_coords(coords, south, north, west, east, panel_size_mm, center_
     return transformed
 
 
-def _transform_shapely_geo_to_panel(geometry, south, north, west, east, panel_size_mm, center_lat):
-    """Transform a shapely geometry from geographic coords to panel mm coords."""
-    from shapely import affinity
-
-    lat_scale = 111.0
-    lon_scale = 111.0 * np.cos(np.radians(center_lat))
-
-    real_width_km = (east - west) * lon_scale
-    real_height_km = (north - south) * lat_scale
-    scale = panel_size_mm / max(real_width_km, real_height_km)
-
-    rendered_w = real_width_km * scale
-    rendered_h = real_height_km * scale
-    x_offset = (panel_size_mm - rendered_w) / 2
-    y_offset = (panel_size_mm - rendered_h) / 2
-
-    def transform_coord(x, y):
-        px = (x - west) * lon_scale * scale + x_offset
-        py = (y - south) * lat_scale * scale + y_offset
-        return px, py
-
-    from shapely.ops import transform
-    return transform(lambda x, y: transform_coord(x, y), geometry)
-
-
 def buffer_lines(coord_sets, width_mm, simplify_tol):
     """
     Buffer a list of polylines to create filled polygons of a given width.
@@ -296,7 +404,6 @@ def buffer_lines(coord_sets, width_mm, simplify_tol):
             continue
         try:
             line = LineString(coords)
-            # cap_style=2 (flat), join_style=2 (miter)
             buffered = line.buffer(width_mm / 2, cap_style=2, join_style=2)
             if not buffered.is_empty:
                 polys.append(buffered)
@@ -308,7 +415,7 @@ def buffer_lines(coord_sets, width_mm, simplify_tol):
 
     merged = unary_union(polys)
 
-    # Morphological closing: dilate then erode to fuse sliver gaps between segments
+    # Morphological closing: dilate then erode to fuse sliver gaps
     closed = merged.buffer(0.15).buffer(-0.15)
 
     simplified = closed.simplify(simplify_tol, preserve_topology=True)
@@ -317,7 +424,28 @@ def buffer_lines(coord_sets, width_mm, simplify_tol):
     return cleaned
 
 
-MIN_POLYGON_AREA_MM2 = 2.0  # Discard polygons smaller than this (removes buffer artifacts)
+def filled_polygons(polygon_coords_list, simplify_tol):
+    """
+    Create filled shapely polygons from closed coordinate rings.
+    Used for water bodies that should be depressed areas, not outlines.
+    """
+    polys = []
+    for coords in polygon_coords_list:
+        if len(coords) < 4:
+            continue
+        try:
+            p = Polygon(coords)
+            if p.is_valid and not p.is_empty and p.area > 0:
+                polys.append(p)
+        except Exception:
+            continue
+
+    if not polys:
+        return None
+
+    merged = unary_union(polys)
+    simplified = merged.simplify(simplify_tol, preserve_topology=True)
+    return _remove_small_polygons(simplified)
 
 
 def _clean_polygon(poly):
@@ -348,6 +476,7 @@ def _remove_small_polygons(geometry):
         return kept[0]
     return MultiPolygon(kept)
 
+
 def write_dxf(geometry, filepath, layer_name="0"):
     """Write a shapely polygon/multipolygon to DXF as closed polylines."""
     doc = ezdxf.new("R2010")
@@ -362,7 +491,6 @@ def write_dxf(geometry, filepath, layer_name="0"):
         if poly.area < MIN_POLYGON_AREA_MM2:
             skipped += 1
             return
-        # Exterior ring
         coords = list(poly.exterior.coords)
         if len(coords) >= 3:
             msp.add_lwpolyline(
@@ -371,7 +499,6 @@ def write_dxf(geometry, filepath, layer_name="0"):
                 dxfattribs={"layer": layer_name},
             )
             poly_count += 1
-        # Interior rings (holes) — OpenSCAD handles these correctly
         for interior in poly.interiors:
             coords = list(interior.coords)
             if len(coords) >= 3:
@@ -390,7 +517,6 @@ def write_dxf(geometry, filepath, layer_name="0"):
         for poly in geometry.geoms:
             add_polygon(poly)
     else:
-        # Could be GeometryCollection
         for geom in getattr(geometry, "geoms", []):
             if isinstance(geom, Polygon):
                 add_polygon(geom)
@@ -398,169 +524,6 @@ def write_dxf(geometry, filepath, layer_name="0"):
     doc.saveas(str(filepath))
     skipped_msg = f", {skipped} artifacts removed" if skipped else ""
     print(f"  → {filepath}  ({poly_count} polygons{skipped_msg})")
-
-
-def _signed_area(ring):
-    """Signed area via shoelace formula. Positive = CCW."""
-    ring = np.asarray(ring)
-    x, y = ring[:, 0], ring[:, 1]
-    n = len(x)
-    return 0.5 * np.sum(x * np.roll(y, -1) - np.roll(x, -1) * y)
-
-
-def _contourf_paths_to_polygons(paths):
-    """Convert matplotlib contourf Path objects for a single band to shapely."""
-    exteriors = []
-    holes = []
-
-    for path in paths:
-        codes = path.codes
-        verts = path.vertices
-
-        if codes is None:
-            if len(verts) >= 3:
-                sa = _signed_area(verts)
-                (exteriors if sa > 0 else holes).append(verts)
-            continue
-
-        # Split into rings at MOVETO/CLOSEPOLY boundaries
-        ring_start = None
-        for j, code in enumerate(codes):
-            if code == 1:  # MOVETO
-                ring_start = j
-            elif code == 79:  # CLOSEPOLY
-                if ring_start is not None:
-                    ring = verts[ring_start:j]
-                    if len(ring) >= 3:
-                        sa = _signed_area(ring)
-                        if sa > 0:
-                            exteriors.append(ring)
-                        elif sa < 0:
-                            holes.append(ring)
-                ring_start = None
-
-    if not exteriors:
-        return None
-
-    # Sort exteriors largest first for hole matching
-    exteriors.sort(key=lambda r: abs(_signed_area(r)), reverse=True)
-
-    polys = []
-    remaining_holes = list(holes)
-    for ext_ring in exteriors:
-        ext_poly = Polygon(ext_ring)
-        matched = []
-        unmatched = []
-        for hole_ring in remaining_holes:
-            if ext_poly.contains(Point(hole_ring[0])):
-                matched.append(hole_ring[::-1])
-            else:
-                unmatched.append(hole_ring)
-        remaining_holes = unmatched
-        try:
-            p = Polygon(ext_ring, matched)
-            if p.is_valid and not p.is_empty:
-                polys.append(p)
-        except Exception:
-            p = Polygon(ext_ring)
-            if p.is_valid and not p.is_empty:
-                polys.append(p)
-
-    if not polys:
-        return None
-    return unary_union(polys)
-
-
-def generate_relief_levels(lons, lats, elevations, interval):
-    """
-    Generate filled regions for each contour level (area where elevation >= level).
-
-    Returns list of dicts with 'elevation' and 'geometry' keys, one per
-    contour level. Every contour line gets a corresponding relief step.
-    """
-    min_elev = np.floor(elevations.min() / interval) * interval
-    max_elev = np.ceil(elevations.max() / interval) * interval
-    levels = np.arange(min_elev, max_elev + interval, interval)
-
-    stack_levels = [l for l in levels if l <= elevations.max()]
-
-    print(f"  Generating {len(stack_levels)} relief levels "
-          f"(steps at {', '.join(f'{l:.0f}' for l in stack_levels)}m)...")
-
-    relief_levels = []
-    for level in stack_levels:
-        fig, ax = plt.subplots()
-        cs = ax.contourf(lons, lats, elevations, levels=[level, max_elev + 100])
-        plt.close(fig)
-
-        paths = cs.get_paths()
-        if paths:
-            geom = _contourf_paths_to_polygons(paths)
-            if geom is not None and not geom.is_empty:
-                relief_levels.append({
-                    "elevation": float(level),
-                    "geometry": geom,
-                })
-
-    print(f"  → {len(relief_levels)} levels with geometry")
-    return relief_levels
-
-
-def write_relief_scad(relief_levels, relief_height_mm, output_dir, panel_size_mm,
-                      contour_grooves_by_elev):
-    """Generate a SCAD file that stacks relief level DXFs with per-level contour cuts."""
-    n = len(relief_levels)
-    if n == 0:
-        return
-
-    step_height = relief_height_mm / n
-
-    # Map elevation → layer index for contour groove Z placement
-    elev_to_index = {}
-    for i, level in enumerate(relief_levels):
-        elev_to_index[level["elevation"]] = i
-
-    lines = [
-        "// Auto-generated by topo_panel_generator.py — do not edit",
-        f"// {n} relief layers, step height = {step_height:.3f}mm",
-        "",
-        "module relief_layers(contour_depth=1.0) {",
-        "    difference() {",
-        "        union() {",
-    ]
-
-    for i, level in enumerate(relief_levels):
-        height = (i + 1) * step_height
-        elev = level["elevation"]
-        dxf = f"level_{int(elev)}.dxf"
-        lines.append(f"            // {elev:.0f}m")
-        lines.append(f"            linear_extrude(height = {height:.3f})")
-        lines.append(f"                import(\"{dxf}\");")
-
-    lines.append("        }")
-    lines.append("        // Per-level contour groove cuts")
-
-    for elev in sorted(contour_grooves_by_elev.keys()):
-        groove_dxf = f"contour_grooves_{int(elev)}.dxf"
-        # Find which layer this contour sits on.
-        # Contour at elevation L sits on the layer for L (the step above).
-        if elev in elev_to_index:
-            idx = elev_to_index[elev]
-            # Cut from top of this layer down by contour_depth
-            #   layer top = (idx + 1) * step_height
-            top = (idx + 1) * step_height
-            lines.append(f"        // Grooves at {elev:.0f}m (layer top = {top:.3f}mm)")
-            lines.append(f"        translate([0, 0, {top:.3f} - contour_depth])")
-            lines.append(f"            linear_extrude(height = contour_depth + 0.01)")
-            lines.append(f"                import(\"{groove_dxf}\");")
-
-    lines.append("    }")
-    lines.append("}")
-    lines.append("")
-
-    filepath = Path(output_dir) / "relief.scad"
-    filepath.write_text("\n".join(lines))
-    print(f"  → {filepath}  ({n} layers, {step_height:.2f}mm/step)")
 
 
 def write_border_dxf(panel_size_mm, filepath):
@@ -612,15 +575,17 @@ def main():
     print(f"\n[4/7] Road data (OpenStreetMap)")
     roads = get_roads(south, north, west, east, ROAD_TYPES)
 
-    # 5 — Transform to panel coordinates
-    print(f"\n[5/8] Coordinate transform (geo → {PANEL_SIZE_MM}mm panel)")
+    # 5 — Water features
+    print(f"\n[5/7] Water data (OpenStreetMap)")
+    waterways = get_waterways(south, north, west, east, WATERWAY_WIDTHS_MM)
+    water_bodies = get_water_bodies(south, north, west, east, WATER_BODY_EXCLUDE)
+
+    # 6 — Transform to panel coordinates
+    print(f"\n[6/7] Coordinate transform (geo → {PANEL_SIZE_MM}mm panel)")
     contour_mm = [
-        {
-            "coords": geo_to_panel_coords(
-                c["coords"], south, north, west, east, PANEL_SIZE_MM, CENTER_LAT
-            ),
-            "elevation": c["elevation"],
-        }
+        geo_to_panel_coords(
+            c["coords"], south, north, west, east, PANEL_SIZE_MM, CENTER_LAT
+        )
         for c in contours
     ]
     road_mm = [
@@ -629,72 +594,70 @@ def main():
         )
         for r in roads
     ]
+    waterway_mm = [
+        {
+            "coords": geo_to_panel_coords(
+                w["coords"], south, north, west, east, PANEL_SIZE_MM, CENTER_LAT
+            ),
+            "width_mm": w["width_mm"],
+        }
+        for w in waterways
+    ]
+    water_body_mm = [
+        geo_to_panel_coords(
+            wb, south, north, west, east, PANEL_SIZE_MM, CENTER_LAT
+        )
+        for wb in water_bodies
+    ]
 
-    # 6 — Buffer lines to printable groove widths
-    print(f"\n[6/8] Buffering geometry")
-    all_contour_coords = [c["coords"] for c in contour_mm]
+    # 7 — Process geometry
+    print(f"\n[7/7] Processing geometry")
     print(f"  Contours: {CONTOUR_LINE_WIDTH_MM}mm groove width...")
-    contour_geom = buffer_lines(all_contour_coords, CONTOUR_LINE_WIDTH_MM, SIMPLIFY_TOLERANCE_MM)
-
-    # Per-elevation contour grooves (for relief step cuts)
-    contour_by_elev = {}
-    for c in contour_mm:
-        elev = c["elevation"]
-        contour_by_elev.setdefault(elev, []).append(c["coords"])
-    contour_grooves_by_elev = {}
-    for elev, coords_list in sorted(contour_by_elev.items()):
-        geom = buffer_lines(coords_list, CONTOUR_LINE_WIDTH_MM, SIMPLIFY_TOLERANCE_MM)
-        if geom is not None:
-            contour_grooves_by_elev[elev] = geom
-    print(f"  → {len(contour_grooves_by_elev)} contour groove levels")
+    contour_geom = buffer_lines(contour_mm, CONTOUR_LINE_WIDTH_MM, SIMPLIFY_TOLERANCE_MM)
 
     print(f"  Roads: {ROAD_LINE_WIDTH_MM}mm groove width...")
     road_geom = buffer_lines(road_mm, ROAD_LINE_WIDTH_MM, SIMPLIFY_TOLERANCE_MM)
 
-    # 7 — Relief levels (filled contour regions for stepped terrain)
-    print(f"\n[7/8] Relief levels")
-    if RELIEF_ENABLED:
-        relief_levels = generate_relief_levels(
-            lons, lats, elevations, CONTOUR_INTERVAL_M
-        )
-        # Transform relief geometries to panel coordinates
-        for level in relief_levels:
-            geom = level["geometry"]
-            # Apply same geo→panel transform by transforming all polygon coords
-            level["geometry"] = _transform_shapely_geo_to_panel(
-                geom, south, north, west, east, PANEL_SIZE_MM, CENTER_LAT
-            )
-    else:
-        relief_levels = []
-        print("  Skipped (RELIEF_ENABLED = False)")
+    # Buffer waterways per-width, then merge with filled water body polygons
+    print(f"  Waterways: per-type widths...")
+    waterway_polys = []
+    for w in waterway_mm:
+        try:
+            line = LineString(w["coords"])
+            buffered = line.buffer(w["width_mm"] / 2, cap_style=2, join_style=2)
+            if not buffered.is_empty:
+                waterway_polys.append(buffered)
+        except Exception:
+            continue
 
-    # 8 — Write output files
-    print(f"\n[8/8] Writing output files to ./{OUTPUT_DIR}/")
+    print(f"  Water bodies: filled areas...")
+    body_geom = filled_polygons(water_body_mm, SIMPLIFY_TOLERANCE_MM)
+
+    # Merge waterways + water bodies into one water layer
+    all_water = waterway_polys[:]
+    if body_geom is not None:
+        all_water.append(body_geom)
+    if all_water:
+        water_geom = unary_union(all_water)
+        water_geom = water_geom.simplify(SIMPLIFY_TOLERANCE_MM, preserve_topology=True)
+        water_geom = _remove_small_polygons(water_geom)
+    else:
+        water_geom = None
+
+    # Write DXF files
+    print(f"\n  Writing DXF files to ./{OUTPUT_DIR}/")
     write_dxf(contour_geom, output / "contours.dxf", layer_name="contours")
     write_dxf(road_geom, output / "roads.dxf", layer_name="roads")
+    write_dxf(water_geom, output / "water.dxf", layer_name="water")
     write_border_dxf(PANEL_SIZE_MM, output / "border.dxf")
-
-    if relief_levels:
-        for level in relief_levels:
-            dxf_path = output / f"level_{int(level['elevation'])}.dxf"
-            write_dxf(level["geometry"], dxf_path, layer_name="relief")
-        # Per-level contour groove DXFs
-        for elev, geom in contour_grooves_by_elev.items():
-            dxf_path = output / f"contour_grooves_{int(elev)}.dxf"
-            write_dxf(geom, dxf_path, layer_name="contour_grooves")
-        write_relief_scad(
-            relief_levels, RELIEF_HEIGHT_MM, OUTPUT_DIR, PANEL_SIZE_MM,
-            contour_grooves_by_elev,
-        )
 
     # Summary
     print("\n" + "=" * 60)
     print("  DONE!")
     print(f"  Output: ./{OUTPUT_DIR}/contours.dxf")
     print(f"          ./{OUTPUT_DIR}/roads.dxf")
+    print(f"          ./{OUTPUT_DIR}/water.dxf")
     print(f"          ./{OUTPUT_DIR}/border.dxf")
-    if relief_levels:
-        print(f"          ./{OUTPUT_DIR}/relief.scad  ({len(relief_levels)} levels)")
     print()
     print("  Next: open panel.scad in OpenSCAD")
     print("=" * 60)
