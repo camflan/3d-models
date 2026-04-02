@@ -29,7 +29,7 @@ import json
 import srtm
 import ezdxf
 import requests
-from shapely.geometry import LineString, Polygon, MultiPolygon
+from shapely.geometry import LineString, Point, Polygon, MultiPolygon
 from shapely.ops import unary_union
 from pathlib import Path
 
@@ -67,10 +67,9 @@ GRID_RESOLUTION = 500
 # faster OpenSCAD render but less precise curves.
 SIMPLIFY_TOLERANCE_MM = 0.1
 
-# Elevation relief — makes the panel surface follow the terrain
+# Elevation relief — stacked filled contour regions for stepped terrain
 RELIEF_ENABLED = True
-RELIEF_HEIGHT_MM = 3.0         # Height range mapped to elevation (min→max becomes 0→this)
-RELIEF_RESOLUTION = 400        # Heightmap image resolution (NxN pixels)
+RELIEF_HEIGHT_MM = 3.0         # Total height range across all steps
 
 # Output directory (relative to this script)
 OUTPUT_DIR = "topo_output"
@@ -110,7 +109,7 @@ def get_elevation_grid(south, north, west, east, resolution):
     for i, lat in enumerate(lats):
         for j, lon in enumerate(lons):
             e = elevation_data.get_elevation(lat, lon)
-            if e is not None:
+            if e is not None and e > 0:
                 grid[i, j] = e
             else:
                 grid[i, j] = np.nan
@@ -118,17 +117,19 @@ def get_elevation_grid(south, north, west, east, resolution):
         if (i + 1) % 100 == 0:
             print(f"    ...row {i + 1}/{resolution}")
 
-    # Fill any gaps with nearest neighbor interpolation
+    # Fill any gaps via iterative local mean (expanding window until all filled)
     if failed > 0:
         print(f"  Filling {failed} missing elevation points...")
         from scipy.ndimage import generic_filter
-        mask = np.isnan(grid)
-        if mask.any():
-            # Simple fill: replace NaNs with local mean
+        for window in [3, 5, 9, 15]:
+            mask = np.isnan(grid)
+            if not mask.any():
+                break
             def fill_nan(values):
                 valid = values[~np.isnan(values)]
-                return np.mean(valid) if len(valid) > 0 else 0
-            grid = generic_filter(grid, fill_nan, size=3)
+                return np.mean(valid) if len(valid) > 0 else np.nan
+            filled = generic_filter(grid, fill_nan, size=window)
+            grid[mask] = filled[mask]
 
     return lons, lats, grid
 
@@ -259,6 +260,31 @@ def geo_to_panel_coords(coords, south, north, west, east, panel_size_mm, center_
     return transformed
 
 
+def _transform_shapely_geo_to_panel(geometry, south, north, west, east, panel_size_mm, center_lat):
+    """Transform a shapely geometry from geographic coords to panel mm coords."""
+    from shapely import affinity
+
+    lat_scale = 111.0
+    lon_scale = 111.0 * np.cos(np.radians(center_lat))
+
+    real_width_km = (east - west) * lon_scale
+    real_height_km = (north - south) * lat_scale
+    scale = panel_size_mm / max(real_width_km, real_height_km)
+
+    rendered_w = real_width_km * scale
+    rendered_h = real_height_km * scale
+    x_offset = (panel_size_mm - rendered_w) / 2
+    y_offset = (panel_size_mm - rendered_h) / 2
+
+    def transform_coord(x, y):
+        px = (x - west) * lon_scale * scale + x_offset
+        py = (y - south) * lat_scale * scale + y_offset
+        return px, py
+
+    from shapely.ops import transform
+    return transform(lambda x, y: transform_coord(x, y), geometry)
+
+
 def buffer_lines(coord_sets, width_mm, simplify_tol):
     """
     Buffer a list of polylines to create filled polygons of a given width.
@@ -374,38 +400,167 @@ def write_dxf(geometry, filepath, layer_name="0"):
     print(f"  → {filepath}  ({poly_count} polygons{skipped_msg})")
 
 
-def write_heightmap(elevations, filepath, resolution, contour_interval):
+def _signed_area(ring):
+    """Signed area via shoelace formula. Positive = CCW."""
+    ring = np.asarray(ring)
+    x, y = ring[:, 0], ring[:, 1]
+    n = len(x)
+    return 0.5 * np.sum(x * np.roll(y, -1) - np.roll(x, -1) * y)
+
+
+def _contourf_paths_to_polygons(paths):
+    """Convert matplotlib contourf Path objects for a single band to shapely."""
+    exteriors = []
+    holes = []
+
+    for path in paths:
+        codes = path.codes
+        verts = path.vertices
+
+        if codes is None:
+            if len(verts) >= 3:
+                sa = _signed_area(verts)
+                (exteriors if sa > 0 else holes).append(verts)
+            continue
+
+        # Split into rings at MOVETO/CLOSEPOLY boundaries
+        ring_start = None
+        for j, code in enumerate(codes):
+            if code == 1:  # MOVETO
+                ring_start = j
+            elif code == 79:  # CLOSEPOLY
+                if ring_start is not None:
+                    ring = verts[ring_start:j]
+                    if len(ring) >= 3:
+                        sa = _signed_area(ring)
+                        if sa > 0:
+                            exteriors.append(ring)
+                        elif sa < 0:
+                            holes.append(ring)
+                ring_start = None
+
+    if not exteriors:
+        return None
+
+    # Sort exteriors largest first for hole matching
+    exteriors.sort(key=lambda r: abs(_signed_area(r)), reverse=True)
+
+    polys = []
+    remaining_holes = list(holes)
+    for ext_ring in exteriors:
+        ext_poly = Polygon(ext_ring)
+        matched = []
+        unmatched = []
+        for hole_ring in remaining_holes:
+            if ext_poly.contains(Point(hole_ring[0])):
+                matched.append(hole_ring[::-1])
+            else:
+                unmatched.append(hole_ring)
+        remaining_holes = unmatched
+        try:
+            p = Polygon(ext_ring, matched)
+            if p.is_valid and not p.is_empty:
+                polys.append(p)
+        except Exception:
+            p = Polygon(ext_ring)
+            if p.is_valid and not p.is_empty:
+                polys.append(p)
+
+    if not polys:
+        return None
+    return unary_union(polys)
+
+
+def generate_relief_levels(lons, lats, elevations, interval):
     """
-    Write a grayscale PNG heightmap for OpenSCAD surface().
+    Generate filled regions for each contour level (area where elevation >= level).
 
-    Elevations are quantized to contour_interval steps so the surface
-    produces flat plateaus with edges aligned to the contour lines.
-
-    Pixel value 0 = lowest elevation, 255 = highest.
-    OpenSCAD surface() reads row 0 as y=0 (bottom), which matches our
-    lat grid (south at index 0), so no vertical flip needed.
+    Returns list of dicts with 'elevation' and 'geometry' keys, one per
+    contour level. Every contour line gets a corresponding relief step.
     """
-    from PIL import Image
-    from scipy.ndimage import zoom
+    min_elev = np.floor(elevations.min() / interval) * interval
+    max_elev = np.ceil(elevations.max() / interval) * interval
+    levels = np.arange(min_elev, max_elev + interval, interval)
 
-    e_min, e_max = elevations.min(), elevations.max()
+    stack_levels = [l for l in levels if l <= elevations.max()]
 
-    # Quantize to contour intervals: snap each elevation to its contour floor
-    quantized = np.floor(elevations / contour_interval) * contour_interval
-    q_min, q_max = quantized.min(), quantized.max()
+    print(f"  Generating {len(stack_levels)} relief levels "
+          f"(steps at {', '.join(f'{l:.0f}' for l in stack_levels)}m)...")
 
-    normalized = (quantized - q_min) / (q_max - q_min) if q_max > q_min else np.zeros_like(quantized)
+    relief_levels = []
+    for level in stack_levels:
+        fig, ax = plt.subplots()
+        cs = ax.contourf(lons, lats, elevations, levels=[level, max_elev + 100])
+        plt.close(fig)
 
-    # Resample to desired output resolution (use nearest-neighbor to preserve steps)
-    if normalized.shape[0] != resolution:
-        zoom_factor = resolution / normalized.shape[0]
-        normalized = zoom(normalized, zoom_factor, order=0)
+        paths = cs.get_paths()
+        if paths:
+            geom = _contourf_paths_to_polygons(paths)
+            if geom is not None and not geom.is_empty:
+                relief_levels.append({
+                    "elevation": float(level),
+                    "geometry": geom,
+                })
 
-    n_steps = int((q_max - q_min) / contour_interval) + 1
-    img_data = (normalized * 255).clip(0, 255).astype(np.uint8)
-    img = Image.fromarray(img_data, mode="L")
-    img.save(str(filepath))
-    print(f"  → {filepath}  ({resolution}x{resolution}px, {n_steps} steps, {e_min:.0f}m–{e_max:.0f}m)")
+    print(f"  → {len(relief_levels)} levels with geometry")
+    return relief_levels
+
+
+def write_relief_scad(relief_levels, relief_height_mm, output_dir, panel_size_mm,
+                      contour_grooves_by_elev):
+    """Generate a SCAD file that stacks relief level DXFs with per-level contour cuts."""
+    n = len(relief_levels)
+    if n == 0:
+        return
+
+    step_height = relief_height_mm / n
+
+    # Map elevation → layer index for contour groove Z placement
+    elev_to_index = {}
+    for i, level in enumerate(relief_levels):
+        elev_to_index[level["elevation"]] = i
+
+    lines = [
+        "// Auto-generated by topo_panel_generator.py — do not edit",
+        f"// {n} relief layers, step height = {step_height:.3f}mm",
+        "",
+        "module relief_layers(contour_depth=1.0) {",
+        "    difference() {",
+        "        union() {",
+    ]
+
+    for i, level in enumerate(relief_levels):
+        height = (i + 1) * step_height
+        elev = level["elevation"]
+        dxf = f"level_{int(elev)}.dxf"
+        lines.append(f"            // {elev:.0f}m")
+        lines.append(f"            linear_extrude(height = {height:.3f})")
+        lines.append(f"                import(\"{dxf}\");")
+
+    lines.append("        }")
+    lines.append("        // Per-level contour groove cuts")
+
+    for elev in sorted(contour_grooves_by_elev.keys()):
+        groove_dxf = f"contour_grooves_{int(elev)}.dxf"
+        # Find which layer this contour sits on.
+        # Contour at elevation L sits on the layer for L (the step above).
+        if elev in elev_to_index:
+            idx = elev_to_index[elev]
+            # Cut from top of this layer down by contour_depth
+            #   layer top = (idx + 1) * step_height
+            top = (idx + 1) * step_height
+            lines.append(f"        // Grooves at {elev:.0f}m (layer top = {top:.3f}mm)")
+            lines.append(f"        translate([0, 0, {top:.3f} - contour_depth])")
+            lines.append(f"            linear_extrude(height = contour_depth + 0.01)")
+            lines.append(f"                import(\"{groove_dxf}\");")
+
+    lines.append("    }")
+    lines.append("}")
+    lines.append("")
+
+    filepath = Path(output_dir) / "relief.scad"
+    filepath.write_text("\n".join(lines))
+    print(f"  → {filepath}  ({n} layers, {step_height:.2f}mm/step)")
 
 
 def write_border_dxf(panel_size_mm, filepath):
@@ -458,11 +613,14 @@ def main():
     roads = get_roads(south, north, west, east, ROAD_TYPES)
 
     # 5 — Transform to panel coordinates
-    print(f"\n[5/7] Coordinate transform (geo → {PANEL_SIZE_MM}mm panel)")
+    print(f"\n[5/8] Coordinate transform (geo → {PANEL_SIZE_MM}mm panel)")
     contour_mm = [
-        geo_to_panel_coords(
-            c["coords"], south, north, west, east, PANEL_SIZE_MM, CENTER_LAT
-        )
+        {
+            "coords": geo_to_panel_coords(
+                c["coords"], south, north, west, east, PANEL_SIZE_MM, CENTER_LAT
+            ),
+            "elevation": c["elevation"],
+        }
         for c in contours
     ]
     road_mm = [
@@ -473,25 +631,61 @@ def main():
     ]
 
     # 6 — Buffer lines to printable groove widths
-    print(f"\n[6/7] Buffering geometry")
+    print(f"\n[6/8] Buffering geometry")
+    all_contour_coords = [c["coords"] for c in contour_mm]
     print(f"  Contours: {CONTOUR_LINE_WIDTH_MM}mm groove width...")
-    contour_geom = buffer_lines(contour_mm, CONTOUR_LINE_WIDTH_MM, SIMPLIFY_TOLERANCE_MM)
+    contour_geom = buffer_lines(all_contour_coords, CONTOUR_LINE_WIDTH_MM, SIMPLIFY_TOLERANCE_MM)
+
+    # Per-elevation contour grooves (for relief step cuts)
+    contour_by_elev = {}
+    for c in contour_mm:
+        elev = c["elevation"]
+        contour_by_elev.setdefault(elev, []).append(c["coords"])
+    contour_grooves_by_elev = {}
+    for elev, coords_list in sorted(contour_by_elev.items()):
+        geom = buffer_lines(coords_list, CONTOUR_LINE_WIDTH_MM, SIMPLIFY_TOLERANCE_MM)
+        if geom is not None:
+            contour_grooves_by_elev[elev] = geom
+    print(f"  → {len(contour_grooves_by_elev)} contour groove levels")
 
     print(f"  Roads: {ROAD_LINE_WIDTH_MM}mm groove width...")
     road_geom = buffer_lines(road_mm, ROAD_LINE_WIDTH_MM, SIMPLIFY_TOLERANCE_MM)
 
-    # 7 — Write output files
-    print(f"\n[7/8] Writing DXF files to ./{OUTPUT_DIR}/")
+    # 7 — Relief levels (filled contour regions for stepped terrain)
+    print(f"\n[7/8] Relief levels")
+    if RELIEF_ENABLED:
+        relief_levels = generate_relief_levels(
+            lons, lats, elevations, CONTOUR_INTERVAL_M
+        )
+        # Transform relief geometries to panel coordinates
+        for level in relief_levels:
+            geom = level["geometry"]
+            # Apply same geo→panel transform by transforming all polygon coords
+            level["geometry"] = _transform_shapely_geo_to_panel(
+                geom, south, north, west, east, PANEL_SIZE_MM, CENTER_LAT
+            )
+    else:
+        relief_levels = []
+        print("  Skipped (RELIEF_ENABLED = False)")
+
+    # 8 — Write output files
+    print(f"\n[8/8] Writing output files to ./{OUTPUT_DIR}/")
     write_dxf(contour_geom, output / "contours.dxf", layer_name="contours")
     write_dxf(road_geom, output / "roads.dxf", layer_name="roads")
     write_border_dxf(PANEL_SIZE_MM, output / "border.dxf")
 
-    # 8 — Heightmap
-    print(f"\n[8/8] Heightmap")
-    if RELIEF_ENABLED:
-        write_heightmap(elevations, output / "heightmap.png", RELIEF_RESOLUTION, CONTOUR_INTERVAL_M)
-    else:
-        print("  Skipped (RELIEF_ENABLED = False)")
+    if relief_levels:
+        for level in relief_levels:
+            dxf_path = output / f"level_{int(level['elevation'])}.dxf"
+            write_dxf(level["geometry"], dxf_path, layer_name="relief")
+        # Per-level contour groove DXFs
+        for elev, geom in contour_grooves_by_elev.items():
+            dxf_path = output / f"contour_grooves_{int(elev)}.dxf"
+            write_dxf(geom, dxf_path, layer_name="contour_grooves")
+        write_relief_scad(
+            relief_levels, RELIEF_HEIGHT_MM, OUTPUT_DIR, PANEL_SIZE_MM,
+            contour_grooves_by_elev,
+        )
 
     # Summary
     print("\n" + "=" * 60)
@@ -499,8 +693,8 @@ def main():
     print(f"  Output: ./{OUTPUT_DIR}/contours.dxf")
     print(f"          ./{OUTPUT_DIR}/roads.dxf")
     print(f"          ./{OUTPUT_DIR}/border.dxf")
-    if RELIEF_ENABLED:
-        print(f"          ./{OUTPUT_DIR}/heightmap.png")
+    if relief_levels:
+        print(f"          ./{OUTPUT_DIR}/relief.scad  ({len(relief_levels)} levels)")
     print()
     print("  Next: open panel.scad in OpenSCAD")
     print("=" * 60)

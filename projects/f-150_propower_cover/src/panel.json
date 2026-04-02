@@ -15,7 +15,6 @@
             "contour_depth": "5",
             "contour_file": "topo_output\/contours.dxf",
             "corner_radius": "4",
-            "heightmap_file": "topo_output\/heightmap.png",
             "panel_size": "254",
             "panel_thickness": "5",
             "relief_height": "3",
@@ -27,10 +26,20 @@
             "contour_depth": "1",
             "contour_file": "topo_output\/contours.dxf",
             "corner_radius": "3",
-            "heightmap_file": "topo_output\/heightmap.png",
             "panel_size": "254",
             "panel_thickness": "5",
             "relief_height": "0",
+            "road_depth": "1.3999999999999999",
+            "road_file": "topo_output\/roads.dxf"
+        },
+        "New set 4": {
+            "$fn": "100",
+            "contour_depth": "1",
+            "contour_file": "topo_output\/contours.dxf",
+            "corner_radius": "4",
+            "panel_size": "254",
+            "panel_thickness": "5",
+            "relief_height": "5",
             "road_depth": "1.3999999999999999",
             "road_file": "topo_output\/roads.dxf"
         }
