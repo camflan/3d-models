@@ -11,13 +11,18 @@
 // ============================================================
 use <fillets3d.scad>;
 
-$fn = 100;
+$fn = 128;
 
 // --- Panel dimensions ---
 panel_size      = (9 + (6.5/16)) * 25.4;     // mm (10 inches)
 panel_thickness = 5;       // mm — total slab thickness
 corner_radius   = 4;       // mm — 0 for sharp corners
 border_width    = 6;       // mm — raised border around panel edge. 0 to disable.
+
+magnet_diameter = 12;
+magnet_thickness = 3;
+magnet_radius = magnet_diameter / 2;
+magnet_corner_inset = ((9/16) * 25.4); // + magnet_radius;
 
 cord_diameter = 3.5;
 cord_corner_inset = (22/16) * 25.4;  // how far from corner to inset cord_holes
@@ -169,12 +174,12 @@ module debossed_text(pos, txt, font, size, depth) {
 
 debossed_text(
     pos   = [panel_size -60, 16],
-    txt   = "Ford ProPower",
+    txt   = "Ford Pro Power",
 //    font  = "Charter:style=Bold Italic",
-//font = "DIN Alternate",
-//font = "IBM Plex Sans:style=Italic",
-font = "Intel One Mono:style=Bold Italic",
-    size  = 8,
+//font = "IBM Plex Sans:style=Bold Italic",
+//font = "Intel One Mono:style=Bold Italic",
+font = "Martius:style=Italic",
+    size  = 12,
     depth = 2.0
 )
 label_pad(
@@ -182,7 +187,7 @@ label_pad(
     w     = 115,
     h     = 30,
     depth = 2.0,
-    corner_r = corner_radius
+    corner_r = corner_radius * 2
 )
 
 difference() {
@@ -191,13 +196,13 @@ difference() {
     clipped_cut(road_depth)    road_cut();
     clipped_cut(water_depth)   water_cut();
 
+    // Cord pull slot
     label_pad(
         pos = [panel_size - cord_corner_inset - (cord_hole_separation / -2), panel_size - cord_corner_inset],
         w = (cord_diameter * 2) + cord_hole_separation,
         h = cord_diameter * 2,
         depth = 1,
         pill = true
-//        corner_r = 2
     );
     translate([panel_size - cord_corner_inset, panel_size - cord_corner_inset, 0]) {
         cylinder(h = panel_thickness, r=cord_diameter/2);
@@ -206,5 +211,19 @@ difference() {
                 cylinder(h = panel_thickness, r=cord_diameter/2);
 
         }
+        
+    // magnets
+    locations = [
+        [magnet_corner_inset, magnet_corner_inset],
+        [magnet_corner_inset, panel_size - magnet_corner_inset],
+        [panel_size - magnet_corner_inset, panel_size - magnet_corner_inset],
+        [panel_size - magnet_corner_inset, magnet_corner_inset]
+    ];
+for (loc = locations) {
+    x = loc[0];
+    y = loc[1];
+    translate([x, y, 0])
+        cylinder(h = magnet_thickness, r= magnet_diameter/2);
+    }
 }
 
