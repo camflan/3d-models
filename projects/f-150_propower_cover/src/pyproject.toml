@@ -8,6 +8,7 @@ dependencies = [
     "ezdxf",
     "matplotlib",
     "numpy",
+    "pillow",
     "requests",
     "scipy>=1.17.1",
     "shapely",

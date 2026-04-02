@@ -67,6 +67,11 @@ GRID_RESOLUTION = 500
 # faster OpenSCAD render but less precise curves.
 SIMPLIFY_TOLERANCE_MM = 0.1
 
+# Elevation relief — makes the panel surface follow the terrain
+RELIEF_ENABLED = True
+RELIEF_HEIGHT_MM = 3.0         # Height range mapped to elevation (min→max becomes 0→this)
+RELIEF_RESOLUTION = 400        # Heightmap image resolution (NxN pixels)
+
 # Output directory (relative to this script)
 OUTPUT_DIR = "topo_output"
 
@@ -369,6 +374,31 @@ def write_dxf(geometry, filepath, layer_name="0"):
     print(f"  → {filepath}  ({poly_count} polygons{skipped_msg})")
 
 
+def write_heightmap(elevations, filepath, resolution):
+    """
+    Write a grayscale PNG heightmap for OpenSCAD surface().
+
+    Pixel value 0 = lowest elevation, 255 = highest.
+    OpenSCAD surface() reads row 0 as y=0 (bottom), which matches our
+    lat grid (south at index 0), so no vertical flip needed.
+    """
+    from PIL import Image
+    from scipy.ndimage import zoom
+
+    e_min, e_max = elevations.min(), elevations.max()
+    normalized = (elevations - e_min) / (e_max - e_min) if e_max > e_min else np.zeros_like(elevations)
+
+    # Resample to desired output resolution
+    if normalized.shape[0] != resolution:
+        zoom_factor = resolution / normalized.shape[0]
+        normalized = zoom(normalized, zoom_factor, order=3)
+
+    img_data = (normalized * 255).clip(0, 255).astype(np.uint8)
+    img = Image.fromarray(img_data, mode="L")
+    img.save(str(filepath))
+    print(f"  → {filepath}  ({resolution}x{resolution}px, {e_min:.0f}m–{e_max:.0f}m)")
+
+
 def write_border_dxf(panel_size_mm, filepath):
     """Write a simple border rectangle DXF for reference alignment."""
     doc = ezdxf.new("R2010")
@@ -441,11 +471,18 @@ def main():
     print(f"  Roads: {ROAD_LINE_WIDTH_MM}mm groove width...")
     road_geom = buffer_lines(road_mm, ROAD_LINE_WIDTH_MM, SIMPLIFY_TOLERANCE_MM)
 
-    # 7 — Write DXF files
-    print(f"\n[7/7] Writing DXF files to ./{OUTPUT_DIR}/")
+    # 7 — Write output files
+    print(f"\n[7/8] Writing DXF files to ./{OUTPUT_DIR}/")
     write_dxf(contour_geom, output / "contours.dxf", layer_name="contours")
     write_dxf(road_geom, output / "roads.dxf", layer_name="roads")
     write_border_dxf(PANEL_SIZE_MM, output / "border.dxf")
+
+    # 8 — Heightmap
+    print(f"\n[8/8] Heightmap")
+    if RELIEF_ENABLED:
+        write_heightmap(elevations, output / "heightmap.png", RELIEF_RESOLUTION)
+    else:
+        print("  Skipped (RELIEF_ENABLED = False)")
 
     # Summary
     print("\n" + "=" * 60)
@@ -453,6 +490,8 @@ def main():
     print(f"  Output: ./{OUTPUT_DIR}/contours.dxf")
     print(f"          ./{OUTPUT_DIR}/roads.dxf")
     print(f"          ./{OUTPUT_DIR}/border.dxf")
+    if RELIEF_ENABLED:
+        print(f"          ./{OUTPUT_DIR}/heightmap.png")
     print()
     print("  Next: open panel.scad in OpenSCAD")
     print("=" * 60)

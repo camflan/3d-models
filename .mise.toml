@@ -1,7 +1,7 @@
 [tools]
 "cargo:topiary-cli" = "latest"
 "cargo:openscad-lsp" = "latest"
-python = "3.12.12"
+python = "3.13"
 
 # openscad and entr/fswatch are not in the mise registry
 # Install via: brew install --cask openscad && brew install entr
