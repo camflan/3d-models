@@ -56,13 +56,15 @@ module base_panel() {
 //  The image covers panel_size x panel_size mm.
 module relief_surface() {
     if (relief_height > 0) {
-        translate([0, 0, 0])
+        translate([0, 0, panel_thickness])
         intersection() {
             // Clip relief to rounded panel outline
             linear_extrude(height = relief_height + 0.1)
                 rounded_square(panel_size, corner_radius);
+                
+            image_scale = ceil((panel_size/400) * 100) / 100;
 
-            scale([ceil(panel_size / 400), ceil(panel_size / 400), relief_height / 100])
+            scale([image_scale, image_scale, relief_height / 100])
                 surface(file = heightmap_file, center = false, convexity = 5);
         }
     }
@@ -71,7 +73,9 @@ module relief_surface() {
 module contour_cut() {
     // Cut from the top of the highest possible point
     top = panel_thickness + relief_height;
-    translate([0, 0, top - contour_depth])
+    translate([0, panel_size, top - contour_depth])
+        rotate([180, 0, 0])
+
         linear_extrude(height = contour_depth + 0.1)
             import(contour_file);
 }
@@ -93,7 +97,7 @@ difference() {
         relief_surface();
     }
     contour_cut();
-    #road_cut();
+    road_cut();
 }
 
 // --- Optional: uncomment to see the border outline for alignment ---

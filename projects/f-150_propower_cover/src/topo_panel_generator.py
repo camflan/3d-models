@@ -374,9 +374,12 @@ def write_dxf(geometry, filepath, layer_name="0"):
     print(f"  → {filepath}  ({poly_count} polygons{skipped_msg})")
 
 
-def write_heightmap(elevations, filepath, resolution):
+def write_heightmap(elevations, filepath, resolution, contour_interval):
     """
     Write a grayscale PNG heightmap for OpenSCAD surface().
+
+    Elevations are quantized to contour_interval steps so the surface
+    produces flat plateaus with edges aligned to the contour lines.
 
     Pixel value 0 = lowest elevation, 255 = highest.
     OpenSCAD surface() reads row 0 as y=0 (bottom), which matches our
@@ -386,17 +389,23 @@ def write_heightmap(elevations, filepath, resolution):
     from scipy.ndimage import zoom
 
     e_min, e_max = elevations.min(), elevations.max()
-    normalized = (elevations - e_min) / (e_max - e_min) if e_max > e_min else np.zeros_like(elevations)
 
-    # Resample to desired output resolution
+    # Quantize to contour intervals: snap each elevation to its contour floor
+    quantized = np.floor(elevations / contour_interval) * contour_interval
+    q_min, q_max = quantized.min(), quantized.max()
+
+    normalized = (quantized - q_min) / (q_max - q_min) if q_max > q_min else np.zeros_like(quantized)
+
+    # Resample to desired output resolution (use nearest-neighbor to preserve steps)
     if normalized.shape[0] != resolution:
         zoom_factor = resolution / normalized.shape[0]
-        normalized = zoom(normalized, zoom_factor, order=3)
+        normalized = zoom(normalized, zoom_factor, order=0)
 
+    n_steps = int((q_max - q_min) / contour_interval) + 1
     img_data = (normalized * 255).clip(0, 255).astype(np.uint8)
     img = Image.fromarray(img_data, mode="L")
     img.save(str(filepath))
-    print(f"  → {filepath}  ({resolution}x{resolution}px, {e_min:.0f}m–{e_max:.0f}m)")
+    print(f"  → {filepath}  ({resolution}x{resolution}px, {n_steps} steps, {e_min:.0f}m–{e_max:.0f}m)")
 
 
 def write_border_dxf(panel_size_mm, filepath):
@@ -480,7 +489,7 @@ def main():
     # 8 — Heightmap
     print(f"\n[8/8] Heightmap")
     if RELIEF_ENABLED:
-        write_heightmap(elevations, output / "heightmap.png", RELIEF_RESOLUTION)
+        write_heightmap(elevations, output / "heightmap.png", RELIEF_RESOLUTION, CONTOUR_INTERVAL_M)
     else:
         print("  Skipped (RELIEF_ENABLED = False)")
 
