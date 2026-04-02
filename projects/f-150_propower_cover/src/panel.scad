@@ -14,7 +14,7 @@ use <fillets3d.scad>;
 $fn = 100;
 
 // --- Panel dimensions ---
-panel_size      = 254;     // mm (10 inches)
+panel_size      = (9 + (6.5/16)) * 25.4;     // mm (10 inches)
 panel_thickness = 5;       // mm — total slab thickness
 corner_radius   = 4;       // mm — 0 for sharp corners
 border_width    = 6;       // mm — raised border around panel edge. 0 to disable.
@@ -152,7 +152,7 @@ module debossed_text(pos, txt, font, size, depth) {
         translate([pos[0], pos[1], panel_thickness - depth - 0.05])
             linear_extrude(height = depth + 0.2)
                 text(txt, font=font, size=size,
-                     halign="center", valign="center");
+                     halign="center", valign="center"); // , spacing=1);
     }
 }
 
@@ -168,26 +168,23 @@ module debossed_text(pos, txt, font, size, depth) {
 // ============================================================
 
 debossed_text(
-    pos   = [panel_size * .75, panel_size * .25],
+    pos   = [panel_size -60, 16],
     txt   = "Ford ProPower",
-    font  = "Baskerville:style=Bold Italic",
-    size  = 10,
+//    font  = "Charter:style=Bold Italic",
+//font = "DIN Alternate",
+//font = "IBM Plex Sans:style=Italic",
+font = "Intel One Mono:style=Bold Italic",
+    size  = 8,
     depth = 2.0
 )
-//debossed_text(
-//    pos   = [panel_size * .75, panel_size * .15],
-//    txt   = "2.4kW",
-//    font  = "IBM Plex Mono:style=Italic",
-//    size  = 6,
-//    depth = 2.0
-//)
 label_pad(
-    pos   = [panel_size * .75, panel_size * .2],
-    w     = 120,
-    h     = 80,
+    pos   = [panel_size -60, 15],
+    w     = 115,
+    h     = 30,
     depth = 2.0,
     corner_r = corner_radius
 )
+
 difference() {
     base_panel();
     clipped_cut(contour_depth) contour_cut();
