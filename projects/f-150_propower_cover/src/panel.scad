@@ -14,7 +14,8 @@ use <fillets3d.scad>;
 $fn = 128;
 
 // --- Panel dimensions ---
-panel_size      = (9 + (6.5/16)) * 25.4;     // mm (10 inches)
+// MAKE THIS MATCH TOPO GENERATION SCRIPT
+panel_size      = (9 + (8/16)) * 25.4;     // mm
 panel_thickness = 5;       // mm — total slab thickness
 corner_radius   = 4;       // mm — 0 for sharp corners
 border_width    = 6;       // mm — raised border around panel edge. 0 to disable.
@@ -23,6 +24,7 @@ magnet_diameter = 12;
 magnet_thickness = 3;
 magnet_radius = magnet_diameter / 2;
 magnet_corner_inset = ((9/16) * 25.4); // + magnet_radius;
+magnet_embed_depth = 0;
 
 cord_diameter = 3.5;
 cord_corner_inset = (22/16) * 25.4;  // how far from corner to inset cord_holes
@@ -186,7 +188,7 @@ label_pad(
     pos   = [panel_size -60, 15],
     w     = 115,
     h     = 30,
-    depth = 2.0,
+    depth = 1.5,
     corner_r = corner_radius * 2
 )
 
@@ -206,12 +208,12 @@ difference() {
     );
     translate([panel_size - cord_corner_inset, panel_size - cord_corner_inset, 0]) {
         cylinder(h = panel_thickness, r=cord_diameter/2);
-        
+
         translate([cord_hole_separation, 0, 0])
                 cylinder(h = panel_thickness, r=cord_diameter/2);
 
         }
-        
+
     // magnets
     locations = [
         [magnet_corner_inset, magnet_corner_inset],
@@ -222,7 +224,7 @@ difference() {
 for (loc = locations) {
     x = loc[0];
     y = loc[1];
-    translate([x, y, 0])
+    translate([x, y, magnet_embed_depth])
         cylinder(h = magnet_thickness, r= magnet_diameter/2);
     }
 }

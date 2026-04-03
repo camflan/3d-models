@@ -45,10 +45,11 @@ CENTER_LON = -95.2353
 MAP_RADIUS_KM = 8
 
 # Panel size in mm (10 inches ≈ 254mm)
-PANEL_SIZE_MM = 254
+PANEL_SIZE_IN = 9.5;
+PANEL_SIZE_MM = PANEL_SIZE_IN * 25.4
 
 # Contour settings
-CONTOUR_INTERVAL_M = 20        # Meters between contour lines
+CONTOUR_INTERVAL_M = 100        # Meters between contour lines
 CONTOUR_LINE_WIDTH_MM = 0.6    # Width of debossed contour grooves
 
 # Road settings
@@ -65,14 +66,19 @@ ROAD_LINE_WIDTH_MM = 1.0       # Width of debossed road grooves
 # Width in mm per type (only types listed here are fetched):
 WATERWAY_WIDTHS_MM = {
     "river": 3.0,
-    "stream": 1.0,
+    "stream": 0,
+    "canal":0.0,
+    "drain":0.0,
+    "ditch":0.0,
+    "brook":0.0,
+    "tidal_channel": 0.0
 }
 # Water bodies (area features using actual polygon shapes from OSM)
 # OSM water= types to exclude — pick from:
 #   basin, canal, ditch, drain, fishpond, lake, lock, moat, oxbow,
 #   pond, reflecting_pool, reservoir, river, salt_pool, sewage,
 #   shallow, stream_pool, swamp, swimming_pool, wastewater, wetland
-WATER_BODY_EXCLUDE = {"wastewater", "basin", "sewage"}
+WATER_BODY_EXCLUDE = {"wastewater", "basin", "sewage", "drain", "ditch", "canal"}
 
 # Elevation sampling resolution (NxN grid)
 # Higher = more detail but slower. 300-500 is a good range.
