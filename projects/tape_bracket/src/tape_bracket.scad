@@ -8,40 +8,31 @@
 
 $fn = 128;
 
+min_rod_gap = 40;
+max_rod_gap = 100;
+
 // === ROD PARAMETERS ===
-rod_diameter    = 15.875;
-rod_clearance   = 0.3;
+rod_diameter    = 16;
+rod_clearance   = 0.2;
 rod_hole_dia    = rod_diameter + rod_clearance;
 
-// === SET SCREW ===
-//set_screw_dia       = 4.2;
-//set_screw_recess    = 7.5;
-//set_screw_recess_d  = 4.0;
+bracket_separation = 30;
 
 // === BRACKET DIMENSIONS ===
-arm_width       = 30;
-min_wall        = 5;
+arm_width       = 15;
+min_wall        = 5.4;
 arm_h           = rod_hole_dia + min_wall * 2;
 
 // === ROD POSITIONS ===
-inner_rod_x     = 25;
-inner_rod_z     = -12;
-outer_rod_x     = 100;
-outer_rod_z     = 12;
+rod_hole_positions = [
+    [45, 0],
+    [110, 24]
+];
 
 // === BACK PLATE ===
 back_plate_t    = 8.6;
-
-// === FILLET ===
-fillet_r_top    = 8;
-fillet_r_bot    = 5;
-
-// === TRUSS PARAMETERS ===
-chord_t         = 5;
-web_t           = 5;
-boss_r_extra    = 4;
-cutout_r        = 4;      // corner rounding on cutouts
-edge_r          = 2;      // rounding on outer profile corners
+back_plate_height = 4 * 20; // 20mm units for skadis alignment?
+back_plate_thickness = 5.4; // should match t-clip thickness?
 
 
 // Tape rolls
@@ -57,28 +48,44 @@ rolls = [
 // ============================================================
 // DERIVED
 // ============================================================
-inner_top = inner_rod_z + arm_h/2;
-inner_bot = inner_rod_z - arm_h/2;
-outer_top = outer_rod_z + arm_h/2;
-outer_bot = outer_rod_z - arm_h/2;
+rod_radius = rod_diameter / 2;
+rod_hole_radius = rod_hole_dia / 2;
 
-plate_bottom = inner_bot - fillet_r_bot;
-plate_top    = outer_top + fillet_r_top;
 
-boss_r = arm_h/2 + boss_r_extra;
+// ================= SKADIS / T-CLIP ==============================
+// SKADIS
+// Controls whether we calculate all internal clips that fit, or only the outer/corners
+only_outer_clips = false;
 
-// Bottom diagonal slope
-bot_x0 = inner_rod_x + arm_h/2;
-bot_z0 = inner_bot;
-bot_x1 = outer_rod_x + arm_h/2;
-bot_z1 = outer_bot;
-bot_slope = (bot_z1 - bot_z0) / (bot_x1 - bot_x0);
-function bot_z_at(x) = bot_z0 + (x - bot_x0) * bot_slope;
+// t-clip from: https://www.printables.com/model/256896-skadis-t-clip-system/files plus https://www.formware.co/onlinestlrepair
+clip_path = "./clip-seat_fixed.stl";
+clip_size = 28.2;
+clip_depth = 5.4;
+
+back_height = back_plate_height;
+outer_width = (arm_width * 2) + bracket_separation;
+
+// Horizontal clip layout (even rows)
+skadis_hole_count = max(1, ceil((outer_width - clip_size) / 40) - 1);
+skadis_hole_offset = (((outer_width - clip_size) % 40) / 2);
+
+// Vertical row layout — 40mm Skadis grid spacing
+skadis_row_count = max(0, ceil((back_height - clip_size) / 20) - 1);
+skadis_row_offset_z = (((back_height - clip_size) % 20) / 2);
+
+// Odd rows are offset 20mm horizontally per Skadis alternating pattern
+skadis_hole_count_odd = max(-1, floor((outer_width - clip_size - skadis_hole_offset - 20) / 40));
+skadis_hole_offset_odd = skadis_hole_offset + 20;
+
 
 // ============================================================
 // MODULES
 // ============================================================
-
+module draw_clip() {
+    translate([-clip_depth, clip_size/2, clip_size/2])
+        rotate([0, 0, 90])
+        import(clip_path);
+}
 
 module rod_cuts(rx, rz) {
     translate([rx, 0, rz])
@@ -87,101 +94,30 @@ module rod_cuts(rx, rz) {
         cylinder(h = arm_width * 2 + 2, d = rod_hole_dia);
 }
 
-// Solid outer profile - original V2 flat silhouette
-module solid_profile_2d() {
-    polygon([
-        [0, plate_bottom],
-        [0, plate_top],
-        [back_plate_t, plate_top],
-        [back_plate_t, outer_top],
-        [outer_rod_x + arm_h/2, outer_top],
-        [outer_rod_x + arm_h/2, outer_bot],
-        [inner_rod_x + arm_h/2, inner_bot],
-        [back_plate_t, inner_bot],
-        [back_plate_t, plate_bottom],
-    ]);
-    translate([back_plate_t, outer_top])
-    difference() {
-        square([fillet_r_top, fillet_r_top]);
-        translate([fillet_r_top, fillet_r_top]) circle(r=fillet_r_top);
-    }
-    translate([back_plate_t, inner_bot - fillet_r_bot])
-    difference() {
-        square([fillet_r_bot, fillet_r_bot]);
-        translate([fillet_r_bot, 0]) circle(r=fillet_r_bot);
-    }
-}
-
 // Rounded polygon cutout
 module rounded_cutout(pts) {
-    offset(r=cutout_r) offset(r=-cutout_r)
+    offset(r=cutout_r)
+        offset(r=-cutout_r)
         polygon(pts);
 }
 
-// Truss profile with cutouts
-module truss_profile_2d() {
-    mid_x = (inner_rod_x + outer_rod_x) / 2;
-
-    top_inner_z = outer_top - chord_t;
-    bp_inner_x  = back_plate_t + chord_t;
-
-    bot_angle = atan2(bot_z1 - bot_z0, bot_x1 - bot_x0);
-    perp_shift = chord_t / cos(bot_angle);
-
-    web1_angle = atan2(outer_top - inner_rod_z, mid_x - inner_rod_x);
-    web1_dx = web_t/2 * sin(web1_angle);
-    web1_dz = web_t/2 * cos(web1_angle);
-
-    difference() {
-        solid_profile_2d();
-
-        // === CUTOUT A: Upper-left triangle ===
-        difference() {
-            rounded_cutout([
-                [bp_inner_x + 2, top_inner_z - 1],
-                [mid_x - web1_dx - 2, top_inner_z - 1],
-                [inner_rod_x + web1_dx + 2, inner_rod_z + web1_dz + 6],
-                [bp_inner_x + 2, inner_rod_z + 8],
-            ]);
-            translate([inner_rod_x, inner_rod_z]) circle(r=boss_r);
-        }
-
-        // === CUTOUT B: Right triangle ===
-        difference() {
-            rounded_cutout([
-                [mid_x + web1_dx + 2, top_inner_z - 1],
-                [outer_rod_x - boss_r + 2, top_inner_z - 1],
-                [outer_rod_x - boss_r + 2, bot_z_at(outer_rod_x - boss_r + 2) + perp_shift + 3],
-                [inner_rod_x + arm_h/2 + 3, bot_z_at(inner_rod_x + arm_h/2 + 3) + perp_shift + 3],
-            ]);
-            translate([inner_rod_x, inner_rod_z]) circle(r=boss_r);
-            translate([outer_rod_x, outer_rod_z]) circle(r=boss_r);
-        }
-    }
-}
 
 module bracket_body() {
     // Extrude with edge rounding on the 2D profile
     translate([0, arm_width/2, 0])
-    rotate([90, 0, 0])
-    linear_extrude(arm_width)
+        rotate([90, 0, 0])
+        linear_extrude(arm_width)
         offset(r=edge_r) offset(r=-edge_r)
         solid_profile_2d();
-
-    // Cylindrical rod bosses
-//    for (pos = [[inner_rod_x, inner_rod_z], [outer_rod_x, outer_rod_z]])
-//        translate([pos[0], 0, pos[1]])
-//            rotate([90, 0, 0])
-//            translate([0, 0, -arm_width/2])
-//            cylinder(h=arm_width, d=arm_h);
 }
 
 // ============================================================
 // ASSEMBLY
 // ============================================================
 module rod_slots() {
-    rod_cuts(inner_rod_x, inner_rod_z);
-    rod_cuts(outer_rod_x, outer_rod_z);
+    for(pos = rod_hole_positions) {
+        rod_cuts(pos[0], pos[1]);
+    }
 }
 
 module tape_bracket() {
@@ -191,57 +127,224 @@ module tape_bracket() {
     }
 }
 
-difference() {
-    hull() {
-        tape_bracket();
-        translate([0, -arm_width, plate_bottom])
-            cube([10, arm_width, plate_top - plate_bottom]);
-    }
-
-    rod_slots();
-}
-
-
 module tape_roll(spool_diameter, outer_diameter, width) {
     translate([0,0,0])
-    rotate([90, 0, 0])
+        rotate([90, 0, 0])
+        difference() {
+            cylinder(h = width, r = outer_diameter/2, center=true);
+            cylinder(h = width, r = spool_diameter/2, center=true);
+        }
+}
+
+// module rod(x, z, length = 300) {
+//     translate([x, 0, z])
+//         rotate([90, 0, 0])
+//         cylinder(h = length, r = rod_diameter/2);
+// }
+
+// module inner_rod() {
+//     rod(inner_rod_x, inner_rod_y);
+// }
+//
+// module outer_rod() {
+//     rod(outer_rod_x, outer_rod_y);
+// }
+
+function cumulative_y(i, sum = 0) =
+    i + 1 >= len(rolls)
+    ? sum
+    : cumulative_y(i + 1, sum + rolls[i][2]);
+
+module sector(radius, angles, fn = 24) {
+    r = radius / cos(180 / fn);
+    step = -360 / fn;
+
+    points = concat([[0, 0]],
+        [for(a = [angles[0] : step : angles[1] - 360])
+            [r * cos(a), r * sin(a)]
+        ],
+        [[r * cos(angles[1]), r * sin(angles[1])]]
+    );
+
     difference() {
-    cylinder(h = width, r=outer_diameter/2, center=true);
-    cylinder(h=width, r = spool_diameter/2, center=true);
+        circle(radius, $fn = fn);
+        polygon(points);
     }
 }
 
-module rod(x, z, length = 300) {
-    translate([x, 0, z])
-    rotate([90, 0, 0])
-    cylinder(h = length, r = rod_diameter/2);
+module rod_holes() {
+    // rod holes
+    for(pos = rod_hole_positions) {
+        translate([
+            back_plate_thickness + pos[0] + rod_hole_radius,
+            pos[1] + rod_hole_radius + min_wall
+        ])
+        circle(r = rod_hole_radius);
+    }
 }
 
-module inner_rod() {
-rod(inner_rod_x, inner_rod_z);
+module bracket_2d() {
+    hull(){
+        offset(r=min_wall)
+            rod_holes();
+
+        // back plate
+        polygon([
+                [0, 0], // BL
+                [0, back_plate_height], // TL
+                [back_plate_thickness, back_plate_height], // TR
+                [back_plate_thickness, 0], // BR
+        ]);
+    }
 }
 
-module outer_rod() {
-rod(outer_rod_x, outer_rod_z);
+
+linear_extrude(height = 10, center = false, convexity = 10, twist = 0, slices = 20, scale = 1.0) {
+    difference() {
+        bracket_2d();
+        rod_holes();
+    }
 }
 
-function cumulative_y(i, sum = 0) = 
-    i + 1 >= len(rolls)
-        ? sum
-        : cumulative_y(i + 1, sum + rolls[i][2]);
+translate([0, 0, bracket_separation + arm_width]){
+    linear_extrude(height = 10, center = false, convexity = 10, twist = 0, slices = 20, scale = 1.0) {
+        difference() {
+            bracket_2d();
+            rod_holes();
+        }
+    }
+}
 
-for (roll_idx = [0:2]) {
-    roll = rolls[roll_idx];
-    id = roll[0];
-    od = roll[1];
-    w = roll[2];
+cube([
+    back_plate_thickness,
+    back_plate_height,
+    bracket_separation + arm_width
+]);
+
+linear_extrude(h=bracket_separation + arm_width) {
+    difference() {
+        offset(r=min_wall) {
+            rod_holes();
+        }
+        rod_holes();
+    }
+}
+
+module back_plate_filet(side) {
+    pos = side == "left" ? [back_plate_thickness, -arm_width] : [back_plate_thickness, 0 - arm_width - bracket_separation];
+    sector_pos = side == "left" ? [min_wall, 0] : [min_wall, min_wall];
+
+    rotate([270, 0, 0]) {
+        translate(pos){
+            linear_extrude(height = back_plate_height) {
+                difference(){
+                    #polygon([
+                            [0, 0],
+                            [min_wall, 0],
+                            [min_wall, min_wall],
+                            [0, min_wall]
+                    ]);
+
+                    translate(sector_pos)
+                        circle(
+                                r = min_wall,
+                              );
+                }
+            }
+        }
+    }
+}
+
+intersection() {
+translate([0,0,0]) {
+back_plate_filet(side = "left");
+back_plate_filet(side = "right");
+}
+
+linear_extrude(height = 100, center = false, convexity = 10, twist = 0, slices = 20, scale = 1.0) {
+bracket_2d();
+}
+}
+
+
+
+outer_height = back_plate_height;
+
+module rounded_rect(width, depth, height, radius) {
+    // Ensure the radius is not too large
+    radius = min(radius, min(width, depth) / 2);
+
+    linear_extrude(height = height) {
+        hull() {
+            // Bottom-left
+            translate([radius, radius]) circle(r = radius);
+            // Bottom-right
+            translate([width - radius, radius]) circle(r = radius);
+            // Top-left
+            translate([radius, depth - radius]) circle(r = radius);
+            // Top-right
+            translate([width - radius, depth - radius]) circle(r = radius);
+        }
+    }
+}
+
+// backside
+difference() {
+    rotate([90, 270, 270]) rounded_rect(outer_height, outer_width,clip_depth,  5);
+    for (row = [0:skadis_row_count]) {
+        row_h_count = (row % 2 == 0) ? skadis_hole_count : skadis_hole_count_odd;
+        row_h_offset = (row % 2 == 0) ? skadis_hole_offset : skadis_hole_offset_odd;
+        if (row_h_count >= 0)
+        translate([0, row_h_offset, skadis_row_offset_z + 20 * row]) for (a = [0:row_h_count]) {
+            is_outer = (a == 0 || a == row_h_count) && (row == 0 || row == skadis_row_count);
+            if (!only_outer_clips || is_outer) {
+                translate([-clip_depth - 0.1, (40 * a) + clip_size / 2, clip_size / 2]) rotate([0, 90]) cylinder(h=clip_depth + 0.2, d=clip_size);
+            }
+        }
+    }
+}
+
+// draw clips
+#for (row = [0:skadis_row_count]) {
+    row_h_count = (row % 2 == 0) ? skadis_hole_count : skadis_hole_count_odd;
+    row_h_offset = (row % 2 == 0) ? skadis_hole_offset : skadis_hole_offset_odd;
     
-    offset = cumulative_y(roll_idx);
-    echo(offset);
-    
-    translate([od/2, cumulative_y(roll_idx), 10])
-  tape_roll(id, od, w);
-  }
+    if (row_h_count >= 0)
+    translate([0, row_h_offset, skadis_row_offset_z + 20 * row]) for (a = [0:row_h_count]) {
+        is_outer = (a == 0 || a == row_h_count) && (row == 0 || row == skadis_row_count);
+        if (!only_outer_clips || is_outer) {
+            translate([0, 40 * a]) draw_clip();
+        }
+    }
+}
 
-inner_rod();
-outer_rod();
+
+//
+//
+//
+//!difference() {
+//    hull() {
+//        tape_bracket();
+//        translate([0, -arm_width, plate_bottom])
+//            cube([0, arm_width, plate_top - plate_bottom]);
+//    }
+//
+//    rod_slots();
+//}
+//
+//
+//    for (roll_idx = [0:2]) {
+//        roll = rolls[roll_idx];
+//        id = roll[0];
+//        od = roll[1];
+//        w = roll[2];
+//
+//        offset = cumulative_y(roll_idx);
+//        echo(offset);
+//
+//        translate([od/2, cumulative_y(roll_idx), 10])
+//            tape_roll(id, od, w);
+//    }
+//
+//inner_rod();
+//outer_rod();
