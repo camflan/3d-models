@@ -133,6 +133,25 @@
             "road_file": "topo_output\/roads.dxf",
             "water_depth": "1.2",
             "water_file": "topo_output\/water.dxf"
+        },
+        "New set 12": {
+            "$fn": "128",
+            "border_width": "6",
+            "contour_depth": "1",
+            "contour_file": "topo_output\/contours.dxf",
+            "cord_corner_inset": "35",
+            "cord_diameter": "7",
+            "corner_radius": "4",
+            "magnet_corner_inset": "12",
+            "magnet_diameter": "12.1",
+            "magnet_embed_depth": "0.40000000000000002",
+            "magnet_thickness": "5.75",
+            "panel_size": "239",
+            "panel_thickness": "9",
+            "road_depth": "1.3999999999999999",
+            "road_file": "topo_output\/roads.dxf",
+            "water_depth": "1.2",
+            "water_file": "topo_output\/water.dxf"
         }
     }
 }

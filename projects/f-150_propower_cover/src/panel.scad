@@ -15,20 +15,20 @@ $fn = 128;
 
 // --- Panel dimensions ---
 // MAKE THIS MATCH TOPO GENERATION SCRIPT
-panel_size      = (9 + (8/16)) * 25.4;     // mm
-panel_thickness = 5;       // mm — total slab thickness
+panel_size      = 239;     // mm
+panel_thickness = 9;       // mm — total slab thickness
 corner_radius   = 4;       // mm — 0 for sharp corners
 border_width    = 6;       // mm — raised border around panel edge. 0 to disable.
 
-magnet_diameter = 12;
-magnet_thickness = 3;
+magnet_diameter = 12.1;
+magnet_thickness = 5.75;
 magnet_radius = magnet_diameter / 2;
-magnet_corner_inset = ((9/16) * 25.4); // + magnet_radius;
-magnet_embed_depth = 0;
+magnet_corner_inset = 12; // + magnet_radius;
+magnet_embed_depth = 0.4;
 
-cord_diameter = 3.5;
-cord_corner_inset = (22/16) * 25.4;  // how far from corner to inset cord_holes
-cord_hole_separation = cord_diameter * -3;
+cord_diameter = 7;
+cord_corner_inset = 35;  // how far from corner to inset cord_holes
+cord_hole_separation = cord_diameter * -2.5;
 
 // --- Deboss depths (from top surface) ---
 contour_depth   = 1.0;    // mm — contour line grooves
@@ -174,21 +174,24 @@ module debossed_text(pos, txt, font, size, depth) {
 //  Assembly
 // ============================================================
 
+text_pos = [65, 14];
+
 debossed_text(
-    pos   = [panel_size -60, 16],
+    pos   = [panel_size - text_pos[0], text_pos[1]],
     txt   = "Ford Pro Power",
 //    font  = "Charter:style=Bold Italic",
 //font = "IBM Plex Sans:style=Bold Italic",
 //font = "Intel One Mono:style=Bold Italic",
-font = "Martius:style=Italic",
-    size  = 12,
+//font = "Martius:style=Italic",
+font = "Optician Sans",
+    size  = 10,
     depth = 2.0
 )
 label_pad(
-    pos   = [panel_size -60, 15],
-    w     = 115,
-    h     = 30,
-    depth = 1.5,
+    pos   = [panel_size - text_pos[0], text_pos[1]],
+    w     = 125,
+    h     = 22,
+    depth = 2,
     corner_r = corner_radius * 2
 )
 
