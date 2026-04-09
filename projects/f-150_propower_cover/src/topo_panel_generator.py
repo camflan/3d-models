@@ -19,19 +19,21 @@ Then open panel.scad in OpenSCAD.
 """
 
 import sys
-import numpy as np
+
 import matplotlib
+import numpy as np
+
 matplotlib.use("Agg")
-import matplotlib.pyplot as plt
 import hashlib
 import json
-import srtm
-import ezdxf
-import requests
-from shapely.geometry import LineString, Polygon, MultiPolygon
-from shapely.ops import unary_union
 from pathlib import Path
 
+import ezdxf
+import matplotlib.pyplot as plt
+import requests
+import srtm
+from shapely.geometry import LineString, MultiPolygon, Polygon
+from shapely.ops import unary_union
 
 # ============================================================
 #  CONFIGURATION — Tweak these to customize your panel
@@ -44,20 +46,19 @@ CENTER_LON = -95.2353
 # How much area to cover (km from center to each edge)
 MAP_RADIUS_KM = 8
 
-# Panel size in mm (10 inches ≈ 254mm)
-PANEL_SIZE_IN = 9.5;
-PANEL_SIZE_MM = PANEL_SIZE_IN * 25.4
+# Panel size in mm
+PANEL_SIZE_MM = 239
 
 # Contour settings
-CONTOUR_INTERVAL_M = 100        # Meters between contour lines
-CONTOUR_LINE_WIDTH_MM = 0.6    # Width of debossed contour grooves
+CONTOUR_INTERVAL_M = 100  # Meters between contour lines
+CONTOUR_LINE_WIDTH_MM = 0.6  # Width of debossed contour grooves
 
 # Road settings
 # OSM highway types — pick from:
 #   motorway, trunk, primary, secondary, tertiary,
 #   residential, unclassified, service
 ROAD_TYPES = ["motorway", "trunk", "primary", "secondary"]
-ROAD_LINE_WIDTH_MM = 1.0       # Width of debossed road grooves
+ROAD_LINE_WIDTH_MM = 1.0  # Width of debossed road grooves
 
 # Water settings
 # Waterways (line features buffered to a given width)
@@ -65,13 +66,13 @@ ROAD_LINE_WIDTH_MM = 1.0       # Width of debossed road grooves
 #   river, stream, canal, drain, ditch, brook, tidal_channel
 # Width in mm per type (only types listed here are fetched):
 WATERWAY_WIDTHS_MM = {
+    "brook": 0.0,
+    "canal": 0.0,
+    "ditch": 0.0,
+    "drain": 0.0,
     "river": 3.0,
     "stream": 0,
-    "canal":0.0,
-    "drain":0.0,
-    "ditch":0.0,
-    "brook":0.0,
-    "tidal_channel": 0.0
+    "tidal_channel": 0.0,
 }
 # Water bodies (area features using actual polygon shapes from OSM)
 # OSM water= types to exclude — pick from:
@@ -142,13 +143,16 @@ def get_elevation_grid(south, north, west, east, resolution):
     if failed > 0:
         print(f"  Filling {failed} missing elevation points...")
         from scipy.ndimage import generic_filter
+
         for window in [3, 5, 9, 15]:
             mask = np.isnan(grid)
             if not mask.any():
                 break
+
             def fill_nan(values):
                 valid = values[~np.isnan(values)]
                 return np.mean(valid) if len(valid) > 0 else np.nan
+
             filled = generic_filter(grid, fill_nan, size=window)
             grid[mask] = filled[mask]
 
@@ -161,8 +165,10 @@ def generate_contours(lons, lats, elevations, interval):
     max_elev = np.ceil(elevations.max() / interval) * interval
     levels = np.arange(min_elev, max_elev + interval, interval)
 
-    print(f"  Generating contours at {interval}m interval "
-          f"({len(levels)} levels from {min_elev:.0f}m to {max_elev:.0f}m)...")
+    print(
+        f"  Generating contours at {interval}m interval "
+        f"({len(levels)} levels from {min_elev:.0f}m to {max_elev:.0f}m)..."
+    )
 
     fig, ax = plt.subplots()
     cs = ax.contour(lons, lats, elevations, levels=levels)
@@ -173,16 +179,19 @@ def generate_contours(lons, lats, elevations, interval):
         if i < len(cs.allsegs):
             for seg in cs.allsegs[i]:
                 if len(seg) >= 2:
-                    contour_lines.append({
-                        "coords": np.array(seg),
-                        "elevation": float(level),
-                    })
+                    contour_lines.append(
+                        {
+                            "coords": np.array(seg),
+                            "elevation": float(level),
+                        }
+                    )
 
     print(f"  → {len(contour_lines)} contour segments")
     return contour_lines
 
 
 # --- OSM data fetching (cached) ---
+
 
 def _cache_key(prefix, south, north, west, east, tags):
     """Deterministic cache key based on query parameters."""
@@ -227,10 +236,12 @@ def _parse_ways(data):
         if elem["type"] == "way":
             coords = [nodes[nid] for nid in elem.get("nodes", []) if nid in nodes]
             if len(coords) >= 2:
-                ways.append({
-                    "coords": np.array(coords),
-                    "tags": elem.get("tags", {}),
-                })
+                ways.append(
+                    {
+                        "coords": np.array(coords),
+                        "tags": elem.get("tags", {}),
+                    }
+                )
     return ways
 
 
@@ -239,7 +250,10 @@ def get_roads(south, north, west, east, road_types):
     highway_filter = "|".join(road_types)
     print(f"  Fetching roads from OSM (types: {highway_filter})...")
 
-    cache_file = CACHE_DIR / f"roads_{_cache_key('roads', south, north, west, east, road_types)}.json"
+    cache_file = (
+        CACHE_DIR
+        / f"roads_{_cache_key('roads', south, north, west, east, road_types)}.json"
+    )
 
     query = f"""
     [out:json][timeout:60];
@@ -263,7 +277,10 @@ def get_waterways(south, north, west, east, waterway_widths):
     type_filter = "|".join(types)
     print(f"  Fetching waterways from OSM (types: {type_filter})...")
 
-    cache_file = CACHE_DIR / f"waterways_{_cache_key('ww', south, north, west, east, types)}.json"
+    cache_file = (
+        CACHE_DIR
+        / f"waterways_{_cache_key('ww', south, north, west, east, types)}.json"
+    )
 
     query = f"""
     [out:json][timeout:60];
@@ -284,93 +301,6 @@ def get_waterways(south, north, west, east, waterway_widths):
 
     print(f"  → {len(ways)} waterway segments")
     return ways
-
-
-def get_water_bodies(south, north, west, east, exclude_types):
-    """
-    Fetch water body area polygons from OSM: natural=water (lakes, ponds)
-    and waterway=riverbank (older river area mapping).
-    """
-    print(f"  Fetching water bodies from OSM...")
-    cache_file = CACHE_DIR / f"water_{_cache_key('water', south, north, west, east, ['water', 'riverbank'])}.json"
-
-    query = f"""
-    [out:json][timeout:60];
-    (
-      way["natural"="water"]({south},{west},{north},{east});
-      relation["natural"="water"]({south},{west},{north},{east});
-      way["waterway"="riverbank"]({south},{west},{north},{east});
-      relation["waterway"="riverbank"]({south},{west},{north},{east});
-    );
-    (._;>;);
-    out body;
-    """
-
-    data = _fetch_osm(query, cache_file)
-    if data is None:
-        return []
-
-    water_bodies, excluded = _parse_water_bodies(data, exclude_types)
-    if excluded:
-        print(f"  → {len(water_bodies)} water polygons ({excluded} excluded)")
-    else:
-        print(f"  → {len(water_bodies)} water polygons")
-
-    return water_bodies
-
-
-def _parse_water_bodies(data, exclude_types=None):
-    """Extract closed water body polygons from Overpass JSON, filtering excluded types."""
-    exclude_types = exclude_types or set()
-
-    nodes = {}
-    for elem in data["elements"]:
-        if elem["type"] == "node":
-            nodes[elem["id"]] = (elem["lon"], elem["lat"])
-
-    bodies = []
-    excluded = 0
-
-    # Simple closed ways
-    for elem in data["elements"]:
-        if elem["type"] == "way":
-            tags = elem.get("tags", {})
-            water_type = tags.get("water", "")
-            if water_type in exclude_types:
-                excluded += 1
-                continue
-            node_ids = elem.get("nodes", [])
-            coords = [nodes[nid] for nid in node_ids if nid in nodes]
-            if len(coords) >= 4 and node_ids[0] == node_ids[-1]:
-                bodies.append(np.array(coords))
-
-    # Relations (multipolygon) — join member ways into closed rings
-    way_lookup = {}
-    for elem in data["elements"]:
-        if elem["type"] == "way":
-            node_ids = elem.get("nodes", [])
-            coords = [nodes[nid] for nid in node_ids if nid in nodes]
-            if len(coords) >= 2:
-                way_lookup[elem["id"]] = coords
-
-    for elem in data["elements"]:
-        if elem["type"] == "relation":
-            tags = elem.get("tags", {})
-            water_type = tags.get("water", "")
-            if water_type in exclude_types:
-                excluded += 1
-                continue
-            for role in ("outer",):
-                way_ids = [
-                    m["ref"] for m in elem.get("members", [])
-                    if m["type"] == "way" and m.get("role") == role
-                ]
-                rings = _join_ways_into_rings(way_ids, way_lookup)
-                for ring in rings:
-                    if len(ring) >= 4:
-                        bodies.append(np.array(ring))
-
-    return bodies, excluded
 
 
 def _join_ways_into_rings(way_ids, way_lookup):
@@ -433,6 +363,97 @@ def _join_ways_into_rings(way_ids, way_lookup):
     return rings
 
 
+def _parse_water_bodies(data, exclude_types=None):
+    """Extract closed water body polygons from Overpass JSON, filtering excluded types."""
+    exclude_types = exclude_types or set()
+
+    nodes = {}
+    for elem in data["elements"]:
+        if elem["type"] == "node":
+            nodes[elem["id"]] = (elem["lon"], elem["lat"])
+
+    bodies = []
+    excluded = 0
+
+    # Simple closed ways
+    for elem in data["elements"]:
+        if elem["type"] == "way":
+            tags = elem.get("tags", {})
+            water_type = tags.get("water", "")
+            if water_type in exclude_types:
+                excluded += 1
+                continue
+            node_ids = elem.get("nodes", [])
+            coords = [nodes[nid] for nid in node_ids if nid in nodes]
+            if len(coords) >= 4 and node_ids[0] == node_ids[-1]:
+                bodies.append(np.array(coords))
+
+    # Relations (multipolygon) — join member ways into closed rings
+    way_lookup = {}
+    for elem in data["elements"]:
+        if elem["type"] == "way":
+            node_ids = elem.get("nodes", [])
+            coords = [nodes[nid] for nid in node_ids if nid in nodes]
+            if len(coords) >= 2:
+                way_lookup[elem["id"]] = coords
+
+    for elem in data["elements"]:
+        if elem["type"] == "relation":
+            tags = elem.get("tags", {})
+            water_type = tags.get("water", "")
+            if water_type in exclude_types:
+                excluded += 1
+                continue
+            for role in ("outer",):
+                way_ids = [
+                    m["ref"]
+                    for m in elem.get("members", [])
+                    if m["type"] == "way" and m.get("role") == role
+                ]
+                rings = _join_ways_into_rings(way_ids, way_lookup)
+                for ring in rings:
+                    if len(ring) >= 4:
+                        bodies.append(np.array(ring))
+
+    return bodies, excluded
+
+
+def get_water_bodies(south, north, west, east, exclude_types):
+    """
+    Fetch water body area polygons from OSM: natural=water (lakes, ponds)
+    and waterway=riverbank (older river area mapping).
+    """
+    print(f"  Fetching water bodies from OSM...")
+    cache_file = (
+        CACHE_DIR
+        / f"water_{_cache_key('water', south, north, west, east, ['water', 'riverbank'])}.json"
+    )
+
+    query = f"""
+    [out:json][timeout:60];
+    (
+      way["natural"="water"]({south},{west},{north},{east});
+      relation["natural"="water"]({south},{west},{north},{east});
+      way["waterway"="riverbank"]({south},{west},{north},{east});
+      relation["waterway"="riverbank"]({south},{west},{north},{east});
+    );
+    (._;>;);
+    out body;
+    """
+
+    data = _fetch_osm(query, cache_file)
+    if data is None:
+        return []
+
+    water_bodies, excluded = _parse_water_bodies(data, exclude_types)
+    if excluded:
+        print(f"  → {len(water_bodies)} water polygons ({excluded} excluded)")
+    else:
+        print(f"  → {len(water_bodies)} water polygons")
+
+    return water_bodies
+
+
 def geo_to_panel_coords(coords, south, north, west, east, panel_size_mm, center_lat):
     """
     Transform geographic (lon, lat) coordinates to panel (mm) coordinates.
@@ -459,6 +480,34 @@ def geo_to_panel_coords(coords, south, north, west, east, panel_size_mm, center_
     transformed[:, 1] += (panel_size_mm - rendered_h) / 2
 
     return transformed
+
+
+def _clean_polygon(poly):
+    """Remove small interior rings (holes) that cause groove artifacts."""
+    kept_holes = [
+        ring for ring in poly.interiors if Polygon(ring).area >= MIN_POLYGON_AREA_MM2
+    ]
+    return Polygon(poly.exterior, kept_holes)
+
+
+def _remove_small_polygons(geometry):
+    """Strip small polygons and small interior rings."""
+    if geometry is None or geometry.is_empty:
+        return geometry
+    if isinstance(geometry, Polygon):
+        if geometry.area < MIN_POLYGON_AREA_MM2:
+            return None
+        return _clean_polygon(geometry)
+    # MultiPolygon or GeometryCollection
+    kept = []
+    for g in geometry.geoms:
+        if isinstance(g, Polygon) and g.area >= MIN_POLYGON_AREA_MM2:
+            kept.append(_clean_polygon(g))
+    if not kept:
+        return None
+    if len(kept) == 1:
+        return kept[0]
+    return MultiPolygon(kept)
 
 
 def buffer_lines(coord_sets, width_mm, simplify_tol):
@@ -514,35 +563,6 @@ def filled_polygons(polygon_coords_list, simplify_tol):
     merged = unary_union(polys)
     simplified = merged.simplify(simplify_tol, preserve_topology=True)
     return _remove_small_polygons(simplified)
-
-
-def _clean_polygon(poly):
-    """Remove small interior rings (holes) that cause groove artifacts."""
-    kept_holes = [
-        ring for ring in poly.interiors
-        if Polygon(ring).area >= MIN_POLYGON_AREA_MM2
-    ]
-    return Polygon(poly.exterior, kept_holes)
-
-
-def _remove_small_polygons(geometry):
-    """Strip small polygons and small interior rings."""
-    if geometry is None or geometry.is_empty:
-        return geometry
-    if isinstance(geometry, Polygon):
-        if geometry.area < MIN_POLYGON_AREA_MM2:
-            return None
-        return _clean_polygon(geometry)
-    # MultiPolygon or GeometryCollection
-    kept = []
-    for g in geometry.geoms:
-        if isinstance(g, Polygon) and g.area >= MIN_POLYGON_AREA_MM2:
-            kept.append(_clean_polygon(g))
-    if not kept:
-        return None
-    if len(kept) == 1:
-        return kept[0]
-    return MultiPolygon(kept)
 
 
 def write_dxf(geometry, filepath, layer_name="0"):
@@ -613,6 +633,7 @@ def write_border_dxf(panel_size_mm, filepath):
 #  MAIN PIPELINE
 # ============================================================
 
+
 def main():
     output = Path(OUTPUT_DIR)
     output.mkdir(parents=True, exist_ok=True)
@@ -625,8 +646,9 @@ def main():
 
     # 1 — Bounding box
     south, north, west, east = get_bbox(CENTER_LAT, CENTER_LON, MAP_RADIUS_KM)
-    print(f"\n[1/7] Bounding box: "
-          f"{south:.4f}–{north:.4f}°N, {west:.4f}–{east:.4f}°W")
+    print(
+        f"\n[1/7] Bounding box: " f"{south:.4f}–{north:.4f}°N, {west:.4f}–{east:.4f}°W"
+    )
 
     # 2 — Elevation data
     print("\n[2/7] Elevation data (SRTM)")
@@ -672,16 +694,16 @@ def main():
         for w in waterways
     ]
     water_body_mm = [
-        geo_to_panel_coords(
-            wb, south, north, west, east, PANEL_SIZE_MM, CENTER_LAT
-        )
+        geo_to_panel_coords(wb, south, north, west, east, PANEL_SIZE_MM, CENTER_LAT)
         for wb in water_bodies
     ]
 
     # 7 — Process geometry
     print(f"\n[7/7] Processing geometry")
     print(f"  Contours: {CONTOUR_LINE_WIDTH_MM}mm groove width...")
-    contour_geom = buffer_lines(contour_mm, CONTOUR_LINE_WIDTH_MM, SIMPLIFY_TOLERANCE_MM)
+    contour_geom = buffer_lines(
+        contour_mm, CONTOUR_LINE_WIDTH_MM, SIMPLIFY_TOLERANCE_MM
+    )
 
     print(f"  Roads: {ROAD_LINE_WIDTH_MM}mm groove width...")
     road_geom = buffer_lines(road_mm, ROAD_LINE_WIDTH_MM, SIMPLIFY_TOLERANCE_MM)
