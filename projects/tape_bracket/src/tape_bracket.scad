@@ -11,14 +11,16 @@ $fn = 128;
 min_rod_gap = 40;
 max_rod_gap = 100;
 
-filament_diameter = 1.85;
+filament_diameter = 2;
+
+hook_file = "hook.stl";
 
 // === ROD PARAMETERS ===
 rod_diameter    = 16;
-rod_clearance   = 0.25;
+rod_clearance   = 0.3;
 rod_hole_dia    = rod_diameter + rod_clearance;
 
-bracket_separation = 10;
+bracket_separation = 20;
 
 // === BRACKET DIMENSIONS ===
 arm_width       = 5;
@@ -184,63 +186,14 @@ module bracket_2d() {
 
 
 // Arm
-linear_extrude(height = arm_width, center = false, convexity = 10, twist = 0, slices = 20, scale = 1.0) {
+linear_extrude(height = outer_width, center = false, convexity = 10, twist = 0, slices = 20, scale = 1.0) {
     difference() {
         bracket_2d();
         rod_holes();
     }
 }
 
-// Arm
-translate([0, 0, bracket_separation + arm_width]){
-    linear_extrude(height = arm_width, center = false, convexity = 10, twist = 0, slices = 20, scale = 1.0) {
-        difference() {
-            bracket_2d();
-            rod_holes();
-        }
-    }
-}
-
-// back plate
-cube([
-        back_plate_thickness,
-        back_plate_height,
-        bracket_separation + arm_width
-]);
-
-// Rod sleeves
-linear_extrude(h=bracket_separation + arm_width) {
-    difference() {
-        offset(r=min_wall) {
-            rod_holes();
-        }
-        rod_holes();
-    }
-}
-
-
-// Extrude the bracket and add filets
-intersection() {
-    translate([0,0,0]) {
-
-        rotate([90, 0, 0]) {
-            translate([back_plate_thickness, arm_width, 0])
-                filet(d = arm_width, length = back_plate_height);
-
-            translate([back_plate_thickness, arm_width + bracket_separation, 0])
-                rotate([0, 0, 270])
-                filet(d = arm_width, length = back_plate_height);
-        }
-    }
-
-    linear_extrude(
-            height = (arm_width * 2) + bracket_separation,
-            center = false,
-            convexity = 10,
-            twist = 0,
-            slices = 20,
-            scale = 1.0
-            ) {
-        bracket_2d();
-    }
-}
+rotate([0, 0, 0])
+translate([-10.6, 15, 13])
+scale([1, 1, 0.8])
+import(hook_file);
