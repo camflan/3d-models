@@ -14,7 +14,7 @@
 # ──────────────────────────────────────────────────────────
 
 OPENSCAD := openscad
-SCAD_SRC := $(shell find projects -name '*.scad' 2>/dev/null)
+SCAD_SRC := $(shell find projects -name '*.scad' -not -path '*/lib/*' 2>/dev/null)
 STL_OUT  := $(SCAD_SRC:%.scad=%.stl)
 PNG_OUT  := $(foreach s,$(SCAD_SRC),$(dir $(s))../exports/$(notdir $(s:.scad=_preview.png)))
 
@@ -29,7 +29,7 @@ build: $(STL_OUT)
 .PHONY: project
 project:
 	@test -n "$(P)" || (echo "usage: make project P=<name>" && exit 1)
-	$(MAKE) $(shell find projects/$(P) -name '*.scad' | sed 's/\.scad$$/.stl/')
+	$(MAKE) $(shell find projects/$(P) -name '*.scad' -not -path '*/lib/*' | sed 's/\.scad$$/.stl/')
 
 # ──────────────────────────────────────────────────────────
 # Watch/preview workflows
