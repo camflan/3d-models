@@ -63,10 +63,37 @@ The logo extruded 4mm with no base. A logo with a symbol keeps only the symbol.
 | Syncari | 50 x 35mm | blue | cloud |
 | Zur Institute | 50 x 59mm | yellow, orange | sun |
 
-- **Ties:** where a logo has loose pieces, 2mm wide bars join them in the lowest 1.2mm. The bars sit 2.8mm below the logo's face. Set `tie_height` in `logo_mark` to change them.
+- **Ties:** where a logo has loose pieces, 2mm wide bars join them in the lowest 1.2mm. The bars sit 2.8mm below the logo's face. Set `tie_height` in `logo_mark` to change their height.
 - **Interflexion:** the symbol comes from the site's 120px icon (`interflexion_mark.png`), which is sharper than the symbol in its full logo.
 - **Sugar Living:** the icon's white parts print in white filament. As holes, they would leave the center loose.
 - **OpenField:** the black outlines print in black filament, because there is no base to form them.
+
+### Tie color
+
+By default, ties print in the logo's colors. To print them in another color, set `tie_color` on the entry in `MARKS`, then run `src/build_logos.py <slug>_mark`:
+
+```python
+Logo("keel_mark", "keel.svg", WORDMARK_WIDTH, None, (...), tie_color=BLACK)
+```
+
+This adds a 1.2mm back layer: the logo's outline plus the ties, in that color. The logo sits on top of it, and the model stays 4mm thick. The back layer takes one filament, and a model can use at most 4.
+
+![Tie options](exports/tie_options_preview.png)
+
+## Avatars
+
+`exports/<slug>_avatar.3mf` and `.stl` are the mark raised 1.2mm on a 60mm round base, 2mm thick. The logo scales to fit inside the circle with a 3mm margin, so it needs no ties.
+
+To add or remove an avatar, edit `AVATAR_BASES` in `src/build_logos.py`, which sets the base color for each client. `AVATAR_DIAMETER_MM` sets the size.
+
+| Client | Base | Logo size |
+|--------|------|-----------|
+| CES Utility Solutions | white | 54 x 33mm |
+| Edwin | navy | 33 x 43mm |
+| Interflexion | white | 48 x 54mm |
+| Issue Voter | white | 54 x 7mm |
+| Keel | white | 48 x 24mm |
+| Pine Park Health | white | 47 x 39mm |
 
 ## Build pipeline
 
@@ -79,7 +106,7 @@ src/logos/original/*  ──build_logos.py──►  src/logos/<slug>/<layer>.sv
 ```
 
 - `src/build_logos.py [slug ...]` builds all logos, or the ones named. Run it directly; `uv` installs its Python dependencies.
-- Filament colors and widths live in the `LOGOS` and `MARKS` tables in that script. The `.scad` files are generated, so edit the table instead.
+- Filament colors and widths live in the `LOGOS`, `MARKS` and `AVATAR_BASES` tables in that script. The `.scad` files are generated, so edit the table instead.
 - `src/bambu_project_settings.json` is the settings template for the 3MF files (P1S, 0.4mm nozzle, 0.2mm layers).
 - Needs `uv`, `potrace`, `librsvg` (`brew install potrace librsvg`) and OpenSCAD.
 
