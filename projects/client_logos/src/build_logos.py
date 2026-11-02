@@ -3,7 +3,10 @@
 # requires-python = ">=3.13"
 # dependencies = ["numpy", "pillow", "scipy"]
 # ///
-"""Build multi-color logo plaques: one traced SVG per filament, then a Bambu 3MF.
+"""Build multi-color logo models: one traced SVG per filament, then a Bambu 3MF.
+
+LOGOS are plaques: the logo raised on a base. MARKS have no base: the logo's
+symbol, or its wordmark when it has no symbol, extruded on its own.
 
     original ─► large raster ─► label each pixel with a filament
                                         │
@@ -27,7 +30,7 @@ from pathlib import Path
 from xml.sax.saxutils import quoteattr
 
 import numpy as np
-from PIL import Image
+from PIL import Image, ImageDraw
 from scipy import ndimage
 
 SRC_DIR = Path(__file__).resolve().parent
@@ -64,6 +67,13 @@ PLAQUE_PRINT_SETTINGS = {
 
 WHITE = "#FFFFFF"
 BLACK = "#000000"
+# For a mark with white ink: white on a white matte would print as a hole.
+MAGENTA = "#FF00FF"
+
+MARK_WIDTH = 50
+WORDMARK_WIDTH = 70
+TIE_WIDTH_MM = 2
+TIE_ANCHOR_RADIUS_MM = 0.75
 
 
 @dataclass(frozen=True)
@@ -86,16 +96,21 @@ class Logo:
     """`matte` is the color behind transparent pixels. Pick one that differs
     from every logo color: a white wordmark needs a black matte.
 
-    `base_sources` are logo colors that print as the bare base.
+    `base_sources` are logo colors that print as the bare base. With no base
+    (`base` is None) they do not print at all.
+
+    `x_range` keeps part of the logo, as fractions of its inked width. Use it to
+    drop text that has the same color as the symbol.
     """
 
     slug: str
     original: str
     width: int
-    base: str
+    base: str | None
     layers: tuple[Layer, ...]
     matte: str = WHITE
     base_sources: tuple[str, ...] = ()
+    x_range: tuple[float, float] = (0.0, 1.0)
 
 
 LOGOS = (
@@ -200,9 +215,120 @@ LOGOS = (
     ),
 )
 
+MARKS = (
+    Logo(
+        "ces_utility_solutions_mark",
+        "ces_utility_solutions.png",
+        WORDMARK_WIDTH,
+        None,
+        (Layer("blue", "#005F8E", ("#005F8E",)),),
+        base_sources=(BLACK,),
+    ),
+    Logo(
+        "edwin_mark",
+        "edwin.svg",
+        MARK_WIDTH,
+        None,
+        (Layer("beige", "#F2F0EA", ("#F2F0EA",)),),
+        matte=BLACK,
+        x_range=(0.82, 1.0),
+    ),
+    Logo(
+        "interflexion_mark",
+        "interflexion_mark.png",
+        MARK_WIDTH,
+        None,
+        (
+            Layer("blue", "#055BD5", ("#055BD5",)),
+            Layer("purple", "#7613FA", ("#9E15F7", "#7613FA")),
+            Layer("green", "#1CC89E", ("#1CC89E", "#0EBBBD", "#2FD17D")),
+        ),
+    ),
+    Logo(
+        "issue_voter_mark",
+        "issue_voter.png",
+        100,
+        None,
+        (
+            Layer("teal", "#027F9D", ("#027F9D",)),
+            Layer("red", "#C02C33", ("#C02C33",)),
+        ),
+    ),
+    Logo(
+        "keel_mark",
+        "keel.svg",
+        WORDMARK_WIDTH,
+        None,
+        (Layer("blue", "#3CB5E6", (BLACK,)),),
+    ),
+    Logo(
+        "lula_mark",
+        "lula.svg",
+        WORDMARK_WIDTH,
+        None,
+        (Layer("green", "#28B97B", ("#28B97B",)),),
+    ),
+    Logo(
+        "openfield_mark",
+        "openfield.png",
+        MARK_WIDTH,
+        None,
+        (
+            Layer("black", "#070708", ("#070708", "#18291F")),
+            Layer("green", "#046307", ("#046307", "#0A520D")),
+            Layer("blue", "#0073BA", ("#0073BA", "#085C90")),
+            Layer("yellow", "#FEC905", ("#FEC905",)),
+        ),
+        x_range=(0.0, 0.28),
+    ),
+    Logo(
+        "pine_park_health_mark",
+        "pine_park_health_mark.svg",
+        MARK_WIDTH,
+        None,
+        (Layer("green", "#16372C", ("#16372C",)),),
+    ),
+    Logo(
+        "sugar_living_mark",
+        "sugar_living.svg",
+        MARK_WIDTH,
+        None,
+        (
+            Layer("blue", "#65CDF9", ("#3FC1F8", "#65CDF9", "#89DAFA")),
+            Layer("white", WHITE, (WHITE,)),
+        ),
+        matte=MAGENTA,
+        base_sources=("#22303E",),
+    ),
+    Logo(
+        "syncari_mark",
+        "syncari.svg",
+        MARK_WIDTH,
+        None,
+        (Layer("blue", "#3391EF", ("#3391EF",)),),
+    ),
+    Logo(
+        "zur_institute_mark",
+        "zur_institute.jpg",
+        MARK_WIDTH,
+        None,
+        (
+            Layer("yellow", "#F2BF34", ("#F1E26D", "#F2BF34")),
+            Layer("orange", "#F17A21", ("#F39C21", "#F17A21", "#E66255")),
+        ),
+        base_sources=("#231F20", "#242021"),
+    ),
+)
+
 
 def run(*args: str | Path) -> None:
     subprocess.run([str(arg) for arg in args], check=True, capture_output=True)
+
+
+def filament_colors(logo: Logo) -> list[str]:
+    base = [] if logo.base is None else [logo.base]
+
+    return [*base, *(layer.color for layer in logo.layers)]
 
 
 def hex_to_rgb(color: str) -> tuple[int, int, int]:
@@ -261,6 +387,11 @@ def label_pixels(logo: Logo, rgb: np.ndarray, scale: float) -> np.ndarray:
     return remove_edge_fringes(labels, nearest, sources.index(logo.matte), scale)
 
 
+# label_pixels returns 0 for the matte, this for ink that prints as the base,
+# and the next values for logo.layers in order.
+BASE_INK_CLASS = 1
+
+
 def remove_edge_fringes(
     labels: np.ndarray, nearest: np.ndarray, matte_index: int, scale: float
 ) -> np.ndarray:
@@ -295,6 +426,71 @@ def trim_to_ink(classes: np.ndarray) -> np.ndarray:
     return classes[rows[0] : rows[-1] + 1, cols[0] : cols[-1] + 1]
 
 
+def crop_to_range(classes: np.ndarray, x_range: tuple[float, float]) -> np.ndarray:
+    width = classes.shape[1]
+
+    return classes[:, int(x_range[0] * width) : int(x_range[1] * width)]
+
+
+def tie_pieces(
+    classes: np.ndarray, bar_px: int, anchor_radius_px: float
+) -> dict[int, np.ndarray]:
+    """Plan bars that join a mark's loose pieces, so it prints as one object.
+
+    Starting from the largest piece, each step bridges the shortest gap to a piece
+    not joined yet:
+
+        ██████  ━━  ████      ━━ bar, low in the mark and owned by the piece
+        ██████      ████         that it reaches out from
+
+    Bars anchor where a piece is at least 2 x `anchor_radius_px` thick, because a
+    bar on a thin tip would snap the tip off. A piece with no part that thick
+    anchors anywhere.
+
+    Returns one mask of bars for each class that owns any.
+    """
+    ink = classes != 0
+    pieces, count = ndimage.label(ink, structure=np.ones((3, 3)))
+    if count == 1:
+        return {}
+
+    anchors = ndimage.distance_transform_edt(ink) >= anchor_radius_px
+    for piece in set(range(1, count + 1)) - set(np.unique(pieces[anchors]).tolist()):
+        anchors[pieces == piece] = True
+
+    sizes = ndimage.sum_labels(ink, pieces, range(1, count + 1))
+    joined = pieces == int(np.argmax(sizes)) + 1
+    drawings: dict[int, Image.Image] = {}
+
+    for _ in range(count - 1):
+        distance, closest = ndimage.distance_transform_edt(
+            ~(joined & anchors), return_indices=True
+        )
+        loose = anchors & ~joined
+        row, col = np.unravel_index(
+            np.argmin(np.where(loose, distance, np.inf)), classes.shape
+        )
+        target = closest[:, row, col]
+
+        # Run each bar past both ends, so that it overlaps the pieces it joins.
+        reach = np.array((col, row)) - target[::-1]
+        reach = reach / np.linalg.norm(reach) * bar_px / 2
+        start = np.array((col, row)) + reach
+        end = target[::-1] - reach
+
+        owner = int(classes[row, col])
+        canvas = drawings.setdefault(
+            owner, Image.new("1", (classes.shape[1], classes.shape[0]))
+        )
+        ImageDraw.Draw(canvas).line(
+            [tuple(start.tolist()), tuple(end.tolist())], fill=1, width=bar_px
+        )
+
+        joined |= pieces == pieces[row, col]
+
+    return {owner: np.asarray(canvas) for owner, canvas in drawings.items()}
+
+
 def trace_layer(mask: np.ndarray, output: Path, tmp: Path) -> None:
     pbm = tmp / "mask.pbm"
     Image.fromarray(~mask).save(pbm)
@@ -312,20 +508,31 @@ def trace_layer(mask: np.ndarray, output: Path, tmp: Path) -> None:
     )
 
 
-def write_scad(logo: Logo, frame: tuple[int, int]) -> Path:
-    layers = ", ".join(f'["{layer.name}", "{layer.color}"]' for layer in logo.layers)
+def write_scad(logo: Logo, frame: tuple[int, int], tied: set[str]) -> Path:
+    if logo.base is None:
+        module = "logo_mark"
+        base_line = ""
+        rows = [
+            f'["{layer.name}", "{layer.color}", {str(layer.name in tied).lower()}]'
+            for layer in logo.layers
+        ]
+    else:
+        module = "logo_plaque"
+        base_line = f'    base_color = "{logo.base}",\n'
+        rows = [f'["{layer.name}", "{layer.color}"]' for layer in logo.layers]
+
     path = SRC_DIR / f"{logo.slug}.scad"
 
     path.write_text(
         f"// Generated by build_logos.py. Edit the LOGOS table there.\n"
         f"use <lib/logo_plaque.scad>\n\n"
         f'part = "all";\n\n'
-        f"logo_plaque(\n"
+        f"{module}(\n"
         f'    dir = "logos/{logo.slug}",\n'
         f"    frame = [{frame[0]}, {frame[1]}],\n"
         f"    width = {logo.width},\n"
-        f'    base_color = "{logo.base}",\n'
-        f"    layers = [{layers}],\n"
+        f"{base_line}"
+        f"    layers = [{', '.join(rows)}],\n"
         f"    part = part\n"
         f");\n"
     )
@@ -334,19 +541,38 @@ def write_scad(logo: Logo, frame: tuple[int, int]) -> Path:
 
 
 def trace_logo(logo: Logo, tmp: Path) -> Path:
-    if len(logo.layers) + 1 > MAX_FILAMENTS:
+    if len(filament_colors(logo)) > MAX_FILAMENTS:
         raise ValueError(f"{logo.slug} needs more than {MAX_FILAMENTS} filaments")
 
     rgb, scale = load_raster(logo, tmp)
-    classes = trim_to_ink(label_pixels(logo, rgb, scale))
+    classes = label_pixels(logo, rgb, scale)
+
+    if logo.base is None:
+        classes[classes == BASE_INK_CLASS] = 0
+
+    classes = trim_to_ink(crop_to_range(trim_to_ink(classes), logo.x_range))
 
     layer_dir = LOGOS_DIR / logo.slug
     layer_dir.mkdir(exist_ok=True)
 
     for index, layer in enumerate(logo.layers, start=1):
-        trace_layer(classes == index + 1, layer_dir / f"{layer.name}.svg", tmp)
+        trace_layer(
+            classes == index + BASE_INK_CLASS, layer_dir / f"{layer.name}.svg", tmp
+        )
 
-    return write_scad(logo, (classes.shape[1], classes.shape[0]))
+    tied = set()
+    if logo.base is None:
+        px_per_mm = classes.shape[1] / logo.width
+        bars = tie_pieces(
+            classes, round(TIE_WIDTH_MM * px_per_mm), TIE_ANCHOR_RADIUS_MM * px_per_mm
+        )
+
+        for owner, mask in bars.items():
+            layer = logo.layers[owner - BASE_INK_CLASS - 1]
+            trace_layer(mask, layer_dir / f"{layer.name}_ties.svg", tmp)
+            tied.add(layer.name)
+
+    return write_scad(logo, (classes.shape[1], classes.shape[0]), tied)
 
 
 def render_part(scad: Path, part: str, output: Path) -> None:
@@ -476,7 +702,7 @@ def write_3mf(
         f"</part>"
         for part_id, (name, _) in enumerate(parts, start=1)
     )
-    colors = [logo.base, *(layer.color for layer in logo.layers)]
+    colors = filament_colors(logo)
     filament_maps = " ".join("1" for _ in colors)
 
     files = {
@@ -555,7 +781,9 @@ def write_3mf(
 
 def export_logo(logo: Logo, scad: Path, tmp: Path) -> None:
     parts = []
-    for name in ["base", *(layer.name for layer in logo.layers)]:
+    base = [] if logo.base is None else ["base"]
+
+    for name in [*base, *(layer.name for layer in logo.layers)]:
         stl = tmp / f"{name}.stl"
         render_part(scad, name, stl)
         parts.append((name, stl))
@@ -570,11 +798,11 @@ def export_logo(logo: Logo, scad: Path, tmp: Path) -> None:
 
 def main() -> None:
     wanted = set(sys.argv[1:])
-    unknown = wanted - {logo.slug for logo in LOGOS}
+    unknown = wanted - {logo.slug for logo in (*LOGOS, *MARKS)}
     if unknown:
         sys.exit(f"unknown logos: {sorted(unknown)}")
 
-    for logo in LOGOS:
+    for logo in (*LOGOS, *MARKS):
         if wanted and logo.slug not in wanted:
             continue
 
