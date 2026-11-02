@@ -6,7 +6,8 @@
 """Build multi-color logo models: one traced SVG per filament, then a Bambu 3MF.
 
 LOGOS are plaques: the logo raised on a base. MARKS have no base: the logo's
-symbol, or its wordmark when it has no symbol, extruded on its own.
+symbol, or its wordmark when it has no symbol, extruded on its own. AVATARS are
+marks raised on a round base.
 
     original ─► large raster ─► label each pixel with a filament
                                         │
@@ -25,7 +26,7 @@ import subprocess
 import sys
 import tempfile
 import zipfile
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from xml.sax.saxutils import quoteattr
 
@@ -74,6 +75,9 @@ MARK_WIDTH = 50
 WORDMARK_WIDTH = 70
 TIE_WIDTH_MM = 2
 TIE_ANCHOR_RADIUS_MM = 0.75
+BACK_PART = "back"
+AVATAR_DIAMETER_MM = 60
+AVATAR_MARGIN_MM = 3
 
 
 @dataclass(frozen=True)
@@ -96,8 +100,15 @@ class Logo:
     """`matte` is the color behind transparent pixels. Pick one that differs
     from every logo color: a white wordmark needs a black matte.
 
-    `base_sources` are logo colors that print as the bare base. With no base
-    (`base` is None) they do not print at all.
+    `base_sources` are logo colors that print as the bare base.
+    `dropped_sources` are logo colors that do not print, such as a wordmark.
+
+    With no base (`base` is None), loose pieces need joining. By default, bars in
+    the logo's colors do that. `tie_color` instead adds a thin back layer in that
+    color: the logo's outline plus the bars. It takes one filament.
+
+    `avatar_diameter` makes the base a circle, and sizes the logo to fit inside,
+    so `width` has no effect.
 
     `x_range` keeps part of the logo, as fractions of its inked width. Use it to
     drop text that has the same color as the symbol.
@@ -110,7 +121,10 @@ class Logo:
     layers: tuple[Layer, ...]
     matte: str = WHITE
     base_sources: tuple[str, ...] = ()
+    dropped_sources: tuple[str, ...] = ()
     x_range: tuple[float, float] = (0.0, 1.0)
+    tie_color: str | None = None
+    avatar_diameter: int | None = None
 
 
 LOGOS = (
@@ -222,7 +236,7 @@ MARKS = (
         WORDMARK_WIDTH,
         None,
         (Layer("blue", "#005F8E", ("#005F8E",)),),
-        base_sources=(BLACK,),
+        dropped_sources=(BLACK,),
     ),
     Logo(
         "edwin_mark",
@@ -298,7 +312,7 @@ MARKS = (
             Layer("white", WHITE, (WHITE,)),
         ),
         matte=MAGENTA,
-        base_sources=("#22303E",),
+        dropped_sources=("#22303E",),
     ),
     Logo(
         "syncari_mark",
@@ -316,9 +330,31 @@ MARKS = (
             Layer("yellow", "#F2BF34", ("#F1E26D", "#F2BF34")),
             Layer("orange", "#F17A21", ("#F39C21", "#F17A21", "#E66255")),
         ),
-        base_sources=("#231F20", "#242021"),
+        dropped_sources=("#231F20", "#242021"),
     ),
 )
+
+AVATAR_BASES = {
+    "ces_utility_solutions": WHITE,
+    "edwin": "#0D204C",
+    "interflexion": WHITE,
+    "issue_voter": WHITE,
+    "keel": WHITE,
+    "pine_park_health": WHITE,
+}
+
+AVATARS = tuple(
+    replace(
+        mark,
+        slug=mark.slug.replace("_mark", "_avatar"),
+        base=AVATAR_BASES[mark.slug.removesuffix("_mark")],
+        avatar_diameter=AVATAR_DIAMETER_MM,
+    )
+    for mark in MARKS
+    if mark.slug.removesuffix("_mark") in AVATAR_BASES
+)
+
+ALL_MODELS = (*LOGOS, *MARKS, *AVATARS)
 
 
 def run(*args: str | Path) -> None:
@@ -326,9 +362,19 @@ def run(*args: str | Path) -> None:
 
 
 def filament_colors(logo: Logo) -> list[str]:
-    base = [] if logo.base is None else [logo.base]
+    under = [color for color in (logo.base, logo.tie_color) if color is not None]
 
-    return [*base, *(layer.color for layer in logo.layers)]
+    return [*under, *(layer.color for layer in logo.layers)]
+
+
+def part_names(logo: Logo) -> list[str]:
+    """The parts of a model, in the same order as filament_colors."""
+    under = {"base": logo.base, BACK_PART: logo.tie_color}
+
+    return [
+        *(name for name, color in under.items() if color is not None),
+        *(layer.name for layer in logo.layers),
+    ]
 
 
 def hex_to_rgb(color: str) -> tuple[int, int, int]:
@@ -359,7 +405,7 @@ def load_raster(logo: Logo, tmp: Path) -> tuple[np.ndarray, float]:
 
 def label_pixels(logo: Logo, rgb: np.ndarray, scale: float) -> np.ndarray:
     """Give each pixel a layer index: 0 is the base, N is logo.layers[N - 1]."""
-    sources = [logo.matte, *logo.base_sources]
+    sources = [logo.matte, *logo.base_sources, *logo.dropped_sources]
     for layer in logo.layers:
         for color in (*layer.sources, *layer.area_sources):
             if color not in sources:
@@ -384,7 +430,14 @@ def label_pixels(logo: Logo, rgb: np.ndarray, scale: float) -> np.ndarray:
             area[:, : int(layer.x_min * width)] = False
             labels[area] = index
 
-    return remove_edge_fringes(labels, nearest, sources.index(logo.matte), scale)
+    dropped_label = len(logo.layers) + 1
+    for color in logo.dropped_sources:
+        labels[nearest == sources.index(color)] = dropped_label
+
+    classes = remove_edge_fringes(labels, nearest, sources.index(logo.matte), scale)
+    classes[classes == dropped_label + BASE_INK_CLASS] = 0
+
+    return classes
 
 
 # label_pixels returns 0 for the matte, this for ink that prints as the base,
@@ -508,17 +561,38 @@ def trace_layer(mask: np.ndarray, output: Path, tmp: Path) -> None:
     )
 
 
-def write_scad(logo: Logo, frame: tuple[int, int], tied: set[str]) -> Path:
+def avatar_logo_width(classes: np.ndarray, diameter: int) -> float:
+    """The logo width that keeps all ink inside the circle, inside the margin."""
+    rows, cols = np.nonzero(classes)
+    height, width = classes.shape
+    radius_px = np.hypot(rows - height / 2, cols - width / 2).max()
+
+    return round(float((diameter / 2 - AVATAR_MARGIN_MM) * width / radius_px), 2)
+
+
+def write_scad(
+    logo: Logo, frame: tuple[int, int], width: float, tied: set[str]
+) -> Path:
     if logo.base is None:
         module = "logo_mark"
-        base_line = ""
+        extra_lines = ""
+        if logo.tie_color is not None:
+            has_ties = str(BACK_PART in tied).lower()
+            extra_lines = (
+                f'    back_color = "{logo.tie_color}",\n'
+                f"    back_has_ties = {has_ties},\n"
+            )
+
         rows = [
             f'["{layer.name}", "{layer.color}", {str(layer.name in tied).lower()}]'
             for layer in logo.layers
         ]
     else:
         module = "logo_plaque"
-        base_line = f'    base_color = "{logo.base}",\n'
+        extra_lines = f'    base_color = "{logo.base}",\n'
+        if logo.avatar_diameter is not None:
+            extra_lines += f"    diameter = {logo.avatar_diameter},\n"
+
         rows = [f'["{layer.name}", "{layer.color}"]' for layer in logo.layers]
 
     path = SRC_DIR / f"{logo.slug}.scad"
@@ -530,8 +604,8 @@ def write_scad(logo: Logo, frame: tuple[int, int], tied: set[str]) -> Path:
         f"{module}(\n"
         f'    dir = "logos/{logo.slug}",\n'
         f"    frame = [{frame[0]}, {frame[1]}],\n"
-        f"    width = {logo.width},\n"
-        f"{base_line}"
+        f"    width = {width},\n"
+        f"{extra_lines}"
         f"    layers = [{', '.join(rows)}],\n"
         f"    part = part\n"
         f");\n"
@@ -547,13 +621,14 @@ def trace_logo(logo: Logo, tmp: Path) -> Path:
     rgb, scale = load_raster(logo, tmp)
     classes = label_pixels(logo, rgb, scale)
 
-    if logo.base is None:
-        classes[classes == BASE_INK_CLASS] = 0
-
     classes = trim_to_ink(crop_to_range(trim_to_ink(classes), logo.x_range))
 
     layer_dir = LOGOS_DIR / logo.slug
     layer_dir.mkdir(exist_ok=True)
+
+    # A changed setting can leave tie outlines that the model no longer uses.
+    for stale in layer_dir.glob("*.svg"):
+        stale.unlink()
 
     for index, layer in enumerate(logo.layers, start=1):
         trace_layer(
@@ -567,12 +642,22 @@ def trace_logo(logo: Logo, tmp: Path) -> Path:
             classes, round(TIE_WIDTH_MM * px_per_mm), TIE_ANCHOR_RADIUS_MM * px_per_mm
         )
 
-        for owner, mask in bars.items():
-            layer = logo.layers[owner - BASE_INK_CLASS - 1]
-            trace_layer(mask, layer_dir / f"{layer.name}_ties.svg", tmp)
-            tied.add(layer.name)
+        if logo.tie_color is not None and bars:
+            all_bars = np.logical_or.reduce(list(bars.values()))
+            trace_layer(all_bars, layer_dir / "ties.svg", tmp)
+            tied.add(BACK_PART)
 
-    return write_scad(logo, (classes.shape[1], classes.shape[0]), tied)
+        if logo.tie_color is None:
+            for owner, mask in bars.items():
+                layer = logo.layers[owner - BASE_INK_CLASS - 1]
+                trace_layer(mask, layer_dir / f"{layer.name}_ties.svg", tmp)
+                tied.add(layer.name)
+
+    width = logo.width
+    if logo.avatar_diameter is not None:
+        width = avatar_logo_width(classes, logo.avatar_diameter)
+
+    return write_scad(logo, (classes.shape[1], classes.shape[0]), width, tied)
 
 
 def render_part(scad: Path, part: str, output: Path) -> None:
@@ -781,9 +866,7 @@ def write_3mf(
 
 def export_logo(logo: Logo, scad: Path, tmp: Path) -> None:
     parts = []
-    base = [] if logo.base is None else ["base"]
-
-    for name in [*base, *(layer.name for layer in logo.layers)]:
+    for name in part_names(logo):
         stl = tmp / f"{name}.stl"
         render_part(scad, name, stl)
         parts.append((name, stl))
@@ -798,11 +881,11 @@ def export_logo(logo: Logo, scad: Path, tmp: Path) -> None:
 
 def main() -> None:
     wanted = set(sys.argv[1:])
-    unknown = wanted - {logo.slug for logo in (*LOGOS, *MARKS)}
+    unknown = wanted - {logo.slug for logo in ALL_MODELS}
     if unknown:
         sys.exit(f"unknown logos: {sorted(unknown)}")
 
-    for logo in (*LOGOS, *MARKS):
+    for logo in ALL_MODELS:
         if wanted and logo.slug not in wanted:
             continue
 

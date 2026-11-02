@@ -14,6 +14,7 @@ BASE_HEIGHT = 2;
 LOGO_HEIGHT = 1.2;
 BORDER = 3;
 CORNER_RADIUS = 4;
+AVATAR_FN = 180;
 MARK_HEIGHT = 4;
 TIE_HEIGHT = 1.2;
 
@@ -37,7 +38,7 @@ module clipped_layer_2d(dir, layers, index, frame, width) {
     }
 }
 
-module base_2d(frame, width, border, corner_radius) {
+module rounded_base_2d(frame, width, border, corner_radius) {
     height = width * frame.y / frame.x;
 
     offset(r = corner_radius)
@@ -51,6 +52,7 @@ module base_2d(frame, width, border, corner_radius) {
 }
 
 // `part` selects one filament for export: "base", a layer name, or "all".
+// With `diameter`, the base is a circle instead of a rounded rectangle.
 module logo_plaque(
     dir,
     frame,
@@ -61,12 +63,17 @@ module logo_plaque(
     base_height = BASE_HEIGHT,
     logo_height = LOGO_HEIGHT,
     border = BORDER,
-    corner_radius = CORNER_RADIUS
+    corner_radius = CORNER_RADIUS,
+    diameter = undef
 ) {
     if (part == "all" || part == "base") {
         color(base_color)
             linear_extrude(height = base_height)
-                base_2d(frame, width, border, corner_radius);
+                if (is_undef(diameter)) {
+                    rounded_base_2d(frame, width, border, corner_radius);
+                } else {
+                    circle(d = diameter, $fn = AVATAR_FN);
+                }
     }
 
     for (index = [0:1:len(layers) - 1]) {
@@ -88,6 +95,14 @@ module logo_plaque(
 //
 // Each layer is [name, color, has_ties]. Ties are in "<name>_ties.svg", and stop
 // at other layers so that no two parts share volume.
+//
+// With `back_color`, one more filament joins the pieces. The ties, in "ties.svg",
+// and the logo's outline form a back layer, and the logo sits on top of it:
+//
+//   ████  ████   ▒▒▒▒
+//   ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄ ← back layer, `tie_height` thick
+//
+// `part` selects one filament for export: "back", a layer name, or "all".
 module logo_mark(
     dir,
     frame,
@@ -95,15 +110,34 @@ module logo_mark(
     layers,
     part = "all",
     height = MARK_HEIGHT,
-    tie_height = TIE_HEIGHT
+    tie_height = TIE_HEIGHT,
+    back_color = undef,
+    back_has_ties = false
 ) {
+    has_back = !is_undef(back_color);
+    logo_z = has_back ? tie_height : 0;
+
+    if (has_back && (part == "all" || part == "back")) {
+        color(back_color)
+            linear_extrude(height = tie_height) {
+                for (layer = layers) {
+                    layer_2d(dir, layer[0], frame, width);
+                }
+
+                if (back_has_ties) {
+                    layer_2d(dir, "ties", frame, width);
+                }
+            }
+    }
+
     for (index = [0:1:len(layers) - 1]) {
         name = layers[index][0];
 
         if (part == "all" || part == name) {
             color(layers[index][1]) {
-                linear_extrude(height = height)
-                    clipped_layer_2d(dir, layers, index, frame, width);
+                translate([0, 0, logo_z])
+                    linear_extrude(height = height - logo_z)
+                        clipped_layer_2d(dir, layers, index, frame, width);
 
                 if (layers[index][2]) {
                     linear_extrude(height = tie_height)
